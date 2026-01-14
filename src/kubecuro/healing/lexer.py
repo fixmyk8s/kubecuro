@@ -117,17 +117,17 @@ class RawLexer:
         # 1. Fix Stuck Dashes: "-name" -> "- name"
         content = re.sub(r'^(\s*)-(\w)', r'\1- \2', raw_yaml, flags=re.MULTILINE)
         
-        # 2. Fix Stuck Colons: "image:nginx" -> "image: nginx"
-        # CRITICAL FIX: We only want to fix the FIRST colon on a line 
-        # if it's acting as the YAML key separator.
-        # We use a regex that looks for the start of the line, 
-        # some optional spaces, a word, and a colon WITHOUT a space.
-        content = re.sub(r'^(\s*\w+):(\w)', r'\1: \2', content, flags=re.MULTILINE)
+        # 2. Fix Stuck Colons: Handles "image:nginx" AND "- name:nginx"
+        # The (?:-\s*)? part allows the regex to match keys even if they follow a dash.
+        # The \S ensures we only add a space if there isn't one already.
+        content = re.sub(r'^(\s*(?:-\s*)?\w+):(\S)', r'\1: \2', content, flags=re.MULTILINE)
         
         # 3. Standardize Tabs
         content = content.replace('\t', '  ')
 
         # PHASE 2: Line-by-Line Repair
+        # RE-ADDED: Resetting state machine flags before processing
         self.in_block = False
         self.skip_next = False
+        
         return "\n".join([self.repair_line(l) for l in content.splitlines()])
