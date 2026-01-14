@@ -113,14 +113,15 @@ class RawLexer:
         return line.rstrip()
 
     def process_string(self, raw_yaml: str) -> str:
-        # Fix stuck dashes
+        # 1. Fix Stuck Dashes: "-name" -> "- name"
         content = re.sub(r'^(\s*)-(\w)', r'\1- \2', raw_yaml, flags=re.MULTILINE)
         
-        # Fix stuck colons - ONLY if there is no space after the colon
-        # and it's not a URL (contains no slashes after colon)
-        content = re.sub(r':(\S)', r': \1', content)
+        # 2. SMART COLON FIX: "image:nginx:latest" -> "image: nginx:latest"
+        # We only want to add a space after the FIRST colon that follows a key name.
+        # This regex looks for: Start of line -> Indent -> Optional Dash -> Key -> Colon -> NO SPACE
+        content = re.sub(r'^(\s*(?:-\s*)?[\w\.\-\/]+):([^\s\n])', r'\1: \2', content, flags=re.MULTILINE)
         
-        # Standardize Tabs
+        # 3. Standardize Tabs
         content = content.replace('\t', '  ')
 
         self.in_block = False
