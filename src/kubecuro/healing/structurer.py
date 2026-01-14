@@ -56,13 +56,13 @@ class KubeStructurer:
 
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         """
-        NUCLEAR ALIGNER: Forces minimum 2-space nesting for sequences.
-        Ensures 'env' items are always deeper than 'container' items.
+        HIERARCHY EXPANDER: Forces nested lists to be deeper than their parents.
+        Specifically fixes the Container -> Env alignment trap.
         """
         lines = yaml_str.splitlines()
         snapped_lines = []
         
-        # Track the indentation of the last seen dash
+        # Track the last 'anchor' indentation for dashes
         last_dash_indent = -1
         
         for line in lines:
@@ -77,20 +77,20 @@ class KubeStructurer:
                 continue
             
             current_indent = len(line) - len(stripped)
+            # Standard grid snap
             snapped_indent = round(current_indent / 2) * 2
 
             if stripped.startswith('- '):
-                # If this dash is at the SAME snapped level as the previous dash,
-                # but was originally deeper, force it to be 2 spaces deeper.
-                # This prevents env items from 'colliding' with container items.
-                if last_dash_indent != -1 and snapped_indent <= last_dash_indent:
-                    if current_indent > last_dash_indent:
+                # If we've seen a dash before, and this new dash is at the 
+                # same or similar level but was ORIGINALLY deeper, 
+                # force it to be at least 2 spaces deeper than the parent dash.
+                if last_dash_indent != -1:
+                    if current_indent > last_dash_indent and snapped_indent <= last_dash_indent:
                         snapped_indent = last_dash_indent + 2
                 
                 last_dash_indent = snapped_indent
             else:
-                # If we hit a normal key that is less indented than our dash,
-                # we have exited that sub-list context.
+                # Reset if we move back out to a parent key
                 if snapped_indent < last_dash_indent:
                     last_dash_indent = -1
 
