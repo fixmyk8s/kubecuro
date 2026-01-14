@@ -113,18 +113,20 @@ class RawLexer:
         return line.rstrip()
 
     def process_string(self, raw_yaml: str) -> str:
-        # PHASE 1: Global Surgery (Character Level)
-        # Fix stuck dashes: "-name" -> "- name"
+        # PHASE 1: Global Surgery
+        # 1. Fix Stuck Dashes: "-name" -> "- name"
         content = re.sub(r'^(\s*)-(\w)', r'\1- \2', raw_yaml, flags=re.MULTILINE)
         
-        # Fix stuck colons: "image:nginx" -> "image: nginx" (ignores URLs)
-        content = re.sub(r'(?<!http|https):(\w)', r': \1', content)
+        # 2. Fix Stuck Colons: "image:nginx" -> "image: nginx"
+        # Instead of look-behind, we match the key and the character
+        # and ensure it's not a URL by checking for the "//"
+        # This fixes "key:value" but ignores "http://"
+        content = re.sub(r'(\w):(\w)', r'\1: \2', content)
         
-        # Standardize Tabs
+        # 3. Standardize Tabs
         content = content.replace('\t', '  ')
 
-        # PHASE 2: Line-by-Line Repair (Structural Level)
-        # This keeps your existing repair_line logic for state-based fixes
+        # PHASE 2: Line-by-Line Repair
         self.in_block = False
         self.skip_next = False
         return "\n".join([self.repair_line(l) for l in content.splitlines()])
