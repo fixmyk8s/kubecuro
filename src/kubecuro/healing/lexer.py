@@ -113,21 +113,16 @@ class RawLexer:
         return line.rstrip()
 
     def process_string(self, raw_yaml: str) -> str:
-        # PHASE 1: Global Surgery
-        # 1. Fix Stuck Dashes: "-name" -> "- name"
+        # Fix stuck dashes
         content = re.sub(r'^(\s*)-(\w)', r'\1- \2', raw_yaml, flags=re.MULTILINE)
         
-        # 2. Fix Stuck Colons: Handles "image:nginx" AND "- name:nginx"
-        # The (?:-\s*)? part allows the regex to match keys even if they follow a dash.
-        # The \S ensures we only add a space if there isn't one already.
-        content = re.sub(r'^(\s*(?:-\s*)?\w+):(\S)', r'\1: \2', content, flags=re.MULTILINE)
+        # Fix stuck colons - ONLY if there is no space after the colon
+        # and it's not a URL (contains no slashes after colon)
+        content = re.sub(r':(\S)', r': \1', content)
         
-        # 3. Standardize Tabs
+        # Standardize Tabs
         content = content.replace('\t', '  ')
 
-        # PHASE 2: Line-by-Line Repair
-        # RE-ADDED: Resetting state machine flags before processing
         self.in_block = False
         self.skip_next = False
-        
         return "\n".join([self.repair_line(l) for l in content.splitlines()])
