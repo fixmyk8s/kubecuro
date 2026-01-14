@@ -118,10 +118,11 @@ class RawLexer:
         content = re.sub(r'^(\s*)-(\w)', r'\1- \2', raw_yaml, flags=re.MULTILINE)
         
         # 2. Fix Stuck Colons: "image:nginx" -> "image: nginx"
-        # Instead of look-behind, we match the key and the character
-        # and ensure it's not a URL by checking for the "//"
-        # This fixes "key:value" but ignores "http://"
-        content = re.sub(r'(\w):(\w)', r'\1: \2', content)
+        # CRITICAL FIX: We only want to fix the FIRST colon on a line 
+        # if it's acting as the YAML key separator.
+        # We use a regex that looks for the start of the line, 
+        # some optional spaces, a word, and a colon WITHOUT a space.
+        content = re.sub(r'^(\s*\w+):(\w)', r'\1: \2', content, flags=re.MULTILINE)
         
         # 3. Standardize Tabs
         content = content.replace('\t', '  ')
