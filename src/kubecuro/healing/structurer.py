@@ -58,8 +58,9 @@ class KubeStructurer:
         lines = yaml_str.splitlines()
         snapped_lines = []
         
-        # We'll use a strict 2-space grid based on the "last known good" key
-        current_context_indent = 0
+        # Track the "Anchor" indentation (the level of the current list item)
+        current_anchor = 0
+        in_list_item = False
         
         for line in lines:
             stripped = line.lstrip()
@@ -72,20 +73,21 @@ class KubeStructurer:
                 
             original_indent = len(line) - len(stripped)
             
-            # 1. If it's a normal key (not a list item), snap it to the 2-space grid
-            # and update our context
-            if not stripped.startswith('-'):
+            if stripped.startswith('- '):
+                # This is a new list item. Snap it to the grid.
                 new_indent = (original_indent // 2) * 2
-                current_context_indent = new_indent
+                current_anchor = new_indent
+                in_list_item = True
+            elif in_list_item and original_indent > current_anchor:
+                # This is a child of the dash (like 'value:' after '- name:')
+                # It MUST be indented further than the dash anchor.
+                new_indent = current_anchor + 2
             else:
-                # 2. If it's a list item, it MUST be at least at the 
-                # context indent, or 2 spaces deeper if it was originally deeper
-                if original_indent > current_context_indent:
-                    new_indent = current_context_indent + 2
-                else:
-                    new_indent = current_context_indent
+                # Standard key-value pair
+                new_indent = (original_indent // 2) * 2
+                current_anchor = new_indent
+                in_list_item = False
             
-            # 3. Aggressively trim trailing whitespace/tabs
             snapped_lines.append(" " * new_indent + stripped.rstrip())
             
         return "\n".join(snapped_lines)
