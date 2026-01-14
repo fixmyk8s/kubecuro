@@ -31,13 +31,17 @@ def test_full_chaos_healing():
     from ruamel.yaml import YAML
     yaml = YAML()
     try:
-        # If the healer did its job, the Frankenstein manifest 
-        # must now be valid YAML structure.
-        parsed_data = yaml.load(result["content"])
+        # Change yaml.load() to list(yaml.load_all())
+        # This handles manifests with '---' separators
+        parsed_docs = list(yaml.load_all(result["content"]))
         
-        # Verify a specific piece of data was recovered (e.g., the name)
-        # This proves we didn't just return an empty valid file.
-        assert parsed_data is not None
+        # Verify we actually recovered documents
+        assert len(parsed_docs) > 0, "Healer returned an empty stream"
+        assert parsed_docs[0] is not None
+        
+        # Optional: Print how many docs were healed
+        print(f"\nSuccessfully healed {len(parsed_docs)} Kubernetes documents.")
+        
     except Exception as e:
         pytest.fail(f"Healed YAML is still unparseable: {e}")
 
