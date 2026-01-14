@@ -56,43 +56,35 @@ class KubeStructurer:
 
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         """
-        Final Version: Snaps to 2nd column but respects hierarchy.
-        It locks dashes only if they appear to be at the same depth level.
+        ULTIMATE ALIGNER: Forces every line to the nearest 2-space grid.
+        This eliminates off-by-one errors (drift) that confuse the parser.
         """
         lines = yaml_str.splitlines()
         snapped_lines = []
-        # Dictionary to track the 'anchor' for different indentation levels
-        level_anchors = {} 
         
         for line in lines:
             stripped = line.lstrip()
+            
+            # 1. Preserve empty lines and comments
             if not stripped or stripped.startswith('#'):
                 snapped_lines.append(line)
                 continue
-                
+            
+            # 2. Preserve protected YAML structures (---, |, etc)
             if self._is_protected_structure(line):
-                level_anchors = {} # Clear memory on new docs/scalars
                 snapped_lines.append(line)
                 continue
             
+            # 3. Calculate current indentation and snap to nearest 2nd column
+            # Example: 7 spaces -> 6, 9 spaces -> 8, 11 spaces -> 10
             current_indent = len(line) - len(stripped)
-            # Estimate which "level" this line belongs to (0, 2, 4, 6...)
-            level = round(current_indent / 2) * 2
+            snapped_indent = round(current_indent / 2) * 2
             
-            if stripped.startswith('- '):
-                # If we've seen a dash at this approximate level before, 
-                # use that exact indentation to ensure they align.
-                if level in level_anchors:
-                    snapped_indent = level_anchors[level]
-                else:
-                    snapped_indent = level
-                    level_anchors[level] = snapped_indent
-            else:
-                # For non-dash lines, just snap to the grid
-                snapped_indent = level
-                # If a key is less indented than a stored anchor, clear deeper anchors
-                level_anchors = {k: v for k, v in level_anchors.items() if k <= level}
-            
+            # 4. Special Case: Ensure '- ' items are always at least 2 spaces 
+            # if they aren't at the root, to prevent flattening.
+            if stripped.startswith('- ') and snapped_indent == 0 and current_indent > 0:
+                snapped_indent = 2
+                
             snapped_lines.append(" " * snapped_indent + stripped)
         
         return "\n".join(snapped_lines)
