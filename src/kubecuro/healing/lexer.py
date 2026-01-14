@@ -113,22 +113,24 @@ class RawLexer:
         return line.rstrip()
 
     def process_string(self, raw_yaml: str) -> str:
-        # 1. Standardize Tabs FIRST
+        # 1. Standardize Tabs
         content = raw_yaml.replace('\t', '  ')
         
         # 2. Fix Stuck Dashes: "-name" -> "- name"
         content = re.sub(r'^(\s*)-(\w)', r'\1- \2', content, flags=re.MULTILINE)
         
-        # 3. Fix Stuck Colons: ONLY the first colon on a line, 
-        # and only if it's followed by a character (not a space)
+        # 3. Improved Colon Fix
         fixed_lines = []
         for line in content.splitlines():
-            if ':' in line and ': ' not in line:
-                # Regex: find the first colon that has no space after it
-                line = re.sub(r'^(.*?):(\S)', r'\1: \2', line, count=1)
+            # Match start of line -> indent -> key -> colon -> NO space -> value
+            # Example: "  image:nginx:latest" -> "  image: nginx:latest"
+            # This regex captures the key and the colon, then ensures a space follows.
+            line = re.sub(r'^(\s*(?:-\s*)?[\w\.\-\/]+):([^\s\n])', r'\1: \2', line)
             fixed_lines.append(line)
+        
         content = "\n".join(fixed_lines)
 
         self.in_block = False
         self.skip_next = False
+        # Phase 2: Line-by-line repair (for comments and trailing chars)
         return "\n".join([self.repair_line(l) for l in content.splitlines()])
