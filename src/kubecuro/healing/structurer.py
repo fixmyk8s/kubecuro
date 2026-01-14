@@ -56,21 +56,41 @@ class KubeStructurer:
 
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         """
-        NEW: Snaps all lines to the nearest 2-space increment.
-        Fixes the '31 spaces' or 'off-by-one' issues that crash parsers.
+        NEW: Snaps to 2nd column AND ensures list siblings (- ) align.
+        Fixes the 'expected <block end>, but found sequence start' error.
         """
         lines = yaml_str.splitlines()
         snapped_lines = []
+        last_sequence_indent = -1
+        
         for line in lines:
             stripped = line.lstrip()
-            if not stripped or self._is_protected_structure(line):
+            # Preserve empty lines or comments
+            if not stripped or stripped.startswith('#'):
+                snapped_lines.append(line)
+                continue
+                
+            if self._is_protected_structure(line):
+                last_sequence_indent = -1 # Reset context
                 snapped_lines.append(line)
                 continue
             
-            # Calculate current indentation
             current_indent = len(line) - len(stripped)
-            # Snap to nearest 2nd column
-            snapped_indent = round(current_indent / 2) * 2
+            
+            # --- SEQUENCE ALIGNMENT LOGIC ---
+            if stripped.startswith('- '):
+                if last_sequence_indent == -1:
+                    # First dash in a block determines the "anchor"
+                    snapped_indent = round(current_indent / 2) * 2
+                    last_sequence_indent = snapped_indent
+                else:
+                    # Force subsequent dashes to match the anchor
+                    snapped_indent = last_sequence_indent
+            else:
+                # If it's a normal key, calculate snap and reset sequence anchor
+                snapped_indent = round(current_indent / 2) * 2
+                last_sequence_indent = -1
+            
             snapped_lines.append(" " * snapped_indent + stripped)
         
         return "\n".join(snapped_lines)
