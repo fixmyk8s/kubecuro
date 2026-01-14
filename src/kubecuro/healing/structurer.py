@@ -56,40 +56,42 @@ class KubeStructurer:
 
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         """
-        NEW: Snaps to 2nd column AND ensures list siblings (- ) align.
-        Fixes the 'expected <block end>, but found sequence start' error.
+        Final Version: Snaps to 2nd column but respects hierarchy.
+        It locks dashes only if they appear to be at the same depth level.
         """
         lines = yaml_str.splitlines()
         snapped_lines = []
-        last_sequence_indent = -1
+        # Dictionary to track the 'anchor' for different indentation levels
+        level_anchors = {} 
         
         for line in lines:
             stripped = line.lstrip()
-            # Preserve empty lines or comments
             if not stripped or stripped.startswith('#'):
                 snapped_lines.append(line)
                 continue
                 
             if self._is_protected_structure(line):
-                last_sequence_indent = -1 # Reset context
+                level_anchors = {} # Clear memory on new docs/scalars
                 snapped_lines.append(line)
                 continue
             
             current_indent = len(line) - len(stripped)
+            # Estimate which "level" this line belongs to (0, 2, 4, 6...)
+            level = round(current_indent / 2) * 2
             
-            # --- SEQUENCE ALIGNMENT LOGIC ---
             if stripped.startswith('- '):
-                if last_sequence_indent == -1:
-                    # First dash in a block determines the "anchor"
-                    snapped_indent = round(current_indent / 2) * 2
-                    last_sequence_indent = snapped_indent
+                # If we've seen a dash at this approximate level before, 
+                # use that exact indentation to ensure they align.
+                if level in level_anchors:
+                    snapped_indent = level_anchors[level]
                 else:
-                    # Force subsequent dashes to match the anchor
-                    snapped_indent = last_sequence_indent
+                    snapped_indent = level
+                    level_anchors[level] = snapped_indent
             else:
-                # If it's a normal key, calculate snap and reset sequence anchor
-                snapped_indent = round(current_indent / 2) * 2
-                last_sequence_indent = -1
+                # For non-dash lines, just snap to the grid
+                snapped_indent = level
+                # If a key is less indented than a stored anchor, clear deeper anchors
+                level_anchors = {k: v for k, v in level_anchors.items() if k <= level}
             
             snapped_lines.append(" " * snapped_indent + stripped)
         
