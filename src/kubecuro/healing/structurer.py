@@ -57,31 +57,36 @@ class KubeStructurer:
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         lines = yaml_str.splitlines()
         snapped_lines = []
-        last_valid_indent = 0
+        
+        # We'll use a strict 2-space grid based on the "last known good" key
+        current_context_indent = 0
         
         for line in lines:
             stripped = line.lstrip()
             if not stripped:
                 snapped_lines.append("")
                 continue
-            if stripped.startswith('#'):
+            if stripped.startswith('#') or self._is_protected_structure(line):
                 snapped_lines.append(line)
                 continue
                 
-            current_indent = len(line) - len(stripped)
+            original_indent = len(line) - len(stripped)
             
-            # If the indentation is insane (like 31 spaces), 
-            # cap it to the last valid indent + 2.
-            if current_indent > last_valid_indent + 10:
-                snapped_indent = last_valid_indent + 2
-            else:
-                snapped_indent = (current_indent // 2) * 2
-            
-            # Update tracking
+            # 1. If it's a normal key (not a list item), snap it to the 2-space grid
+            # and update our context
             if not stripped.startswith('-'):
-                last_valid_indent = snapped_indent
-                
-            snapped_lines.append(" " * snapped_indent + stripped)
+                new_indent = (original_indent // 2) * 2
+                current_context_indent = new_indent
+            else:
+                # 2. If it's a list item, it MUST be at least at the 
+                # context indent, or 2 spaces deeper if it was originally deeper
+                if original_indent > current_context_indent:
+                    new_indent = current_context_indent + 2
+                else:
+                    new_indent = current_context_indent
+            
+            # 3. Aggressively trim trailing whitespace/tabs
+            snapped_lines.append(" " * new_indent + stripped.rstrip())
             
         return "\n".join(snapped_lines)
 
