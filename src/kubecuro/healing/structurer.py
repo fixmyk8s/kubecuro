@@ -57,29 +57,32 @@ class KubeStructurer:
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         lines = yaml_str.splitlines()
         snapped_lines = []
+        last_valid_indent = 0
         
         for line in lines:
             stripped = line.lstrip()
-            if not stripped or stripped.startswith('#'):
+            if not stripped:
+                snapped_lines.append("")
+                continue
+            if stripped.startswith('#'):
                 snapped_lines.append(line)
                 continue
+                
+            current_indent = len(line) - len(stripped)
             
-            # Calculate actual leading spaces
-            original_indent = len(line) - len(stripped)
+            # If the indentation is insane (like 31 spaces), 
+            # cap it to the last valid indent + 2.
+            if current_indent > last_valid_indent + 10:
+                snapped_indent = last_valid_indent + 2
+            else:
+                snapped_indent = (current_indent // 2) * 2
             
-            # FORCE EVEN INDENTATION (The 2-Space Rule)
-            # If it's 9, it becomes 8. If it's 11, it becomes 10.
-            new_indent = (original_indent // 2) * 2
+            # Update tracking
+            if not stripped.startswith('-'):
+                last_valid_indent = snapped_indent
+                
+            snapped_lines.append(" " * snapped_indent + stripped)
             
-            # SPECIAL CASE: The "Stuck Dash" usually needs 2 extra spaces
-            # if it's a nested list like 'env' inside 'containers'
-            if stripped.startswith('- ') and original_indent % 2 != 0:
-                # If we were at an odd column (like 9 or 11), 
-                # we likely intended to be deeper than the parent.
-                new_indent = ((original_indent + 1) // 2) * 2
-
-            snapped_lines.append(" " * new_indent + stripped)
-        
         return "\n".join(snapped_lines)
 
     def _find_parent_indent(self, lines: List[str], err_line: int) -> int:
