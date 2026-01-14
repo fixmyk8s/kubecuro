@@ -56,35 +56,44 @@ class KubeStructurer:
 
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
         """
-        ULTIMATE ALIGNER: Forces every line to the nearest 2-space grid.
-        This eliminates off-by-one errors (drift) that confuse the parser.
+        NUCLEAR ALIGNER: Forces minimum 2-space nesting for sequences.
+        Ensures 'env' items are always deeper than 'container' items.
         """
         lines = yaml_str.splitlines()
         snapped_lines = []
         
+        # Track the indentation of the last seen dash
+        last_dash_indent = -1
+        
         for line in lines:
             stripped = line.lstrip()
-            
-            # 1. Preserve empty lines and comments
             if not stripped or stripped.startswith('#'):
                 snapped_lines.append(line)
                 continue
             
-            # 2. Preserve protected YAML structures (---, |, etc)
             if self._is_protected_structure(line):
+                last_dash_indent = -1
                 snapped_lines.append(line)
                 continue
             
-            # 3. Calculate current indentation and snap to nearest 2nd column
-            # Example: 7 spaces -> 6, 9 spaces -> 8, 11 spaces -> 10
             current_indent = len(line) - len(stripped)
             snapped_indent = round(current_indent / 2) * 2
-            
-            # 4. Special Case: Ensure '- ' items are always at least 2 spaces 
-            # if they aren't at the root, to prevent flattening.
-            if stripped.startswith('- ') and snapped_indent == 0 and current_indent > 0:
-                snapped_indent = 2
+
+            if stripped.startswith('- '):
+                # If this dash is at the SAME snapped level as the previous dash,
+                # but was originally deeper, force it to be 2 spaces deeper.
+                # This prevents env items from 'colliding' with container items.
+                if last_dash_indent != -1 and snapped_indent <= last_dash_indent:
+                    if current_indent > last_dash_indent:
+                        snapped_indent = last_dash_indent + 2
                 
+                last_dash_indent = snapped_indent
+            else:
+                # If we hit a normal key that is less indented than our dash,
+                # we have exited that sub-list context.
+                if snapped_indent < last_dash_indent:
+                    last_dash_indent = -1
+
             snapped_lines.append(" " * snapped_indent + stripped)
         
         return "\n".join(snapped_lines)
