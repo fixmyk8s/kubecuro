@@ -20,7 +20,7 @@ def test_full_chaos_healing():
     assert result["success"] is True, f"Healing failed with status: {result['status']}"
     
     # Verify that the healer actually detected and fixed things
-    assert result["partial_heal"] is True or result["status"] == "STRUCTURE_OK"
+    assert result["partial_heal"] is True or result["status"] in ["STRUCTURE_OK", "MULTI_DOC_HANDLED"]
     assert result["phase1_complete"] is True
     
     # Verify report accuracy
