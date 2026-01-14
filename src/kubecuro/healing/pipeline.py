@@ -26,12 +26,9 @@ class HealingPipeline:
         self.max_size_mb = max_size_mb
         self.timeout_s = timeout_s
 
-    def heal_manifest(self, raw_content: Optional[str] = None, file_path: Optional[Path] = None) -> Dict[str, Any]:
+    def heal_manifest(self, raw_content: Optional[str] = None, file_path: Optional[Path] = None, force_write: bool = False) -> Dict[str, Any]:
         """
-        Production-hardened Phase 1 healing with ALL edges covered.
-        
-        Supports both string input and file_path input.
-        Handles memory limits, partial heals, BOM, empty inputs, etc.
+        Production-hardened Phase 1 healing with Aggressive Fallback.
         """
         # EDGE 1: None input
         if raw_content is None and file_path is None:
@@ -44,7 +41,7 @@ class HealingPipeline:
             except Exception as e:
                 return self._error_response("", f"FILE_READ_ERROR: {str(e)}", str(e), file_path)
         
-        # EDGE 3: MEMORY FIX - UTF-8 bytes (not sys.getsizeof)
+        # EDGE 3: MEMORY FIX - UTF-8 bytes
         content_bytes = len(raw_content.encode('utf-8'))
         if content_bytes > self.max_size_mb * 1024 * 1024:
             return self._error_response(
@@ -58,36 +55,42 @@ class HealingPipeline:
             return self._error_response("", "EMPTY_INPUT", "No input provided")
         
         try:
-            # Phase 1.1: Lexical Repair
+            # Phase 1.1: Lexical Repair (Stuck Dashes, Colons, Tabs)
             lexed_content = self.lexer.process_string(raw_content)
             
-            # Phase 1.2: Structural Repair
+            # Phase 1.2: Structural Repair (Indentation, Block correction)
             final_yaml, status = self.structurer.process_yaml(lexed_content)
             
             # Phase 1.3: Generate comprehensive report
             report = self.structurer.full_healing_report(raw_content, final_yaml, status)
             
-            # CRITICAL: PARTIAL HEAL LOGIC
+            # --- AGGRESSIVE LOGIC START ---
             success_statuses = {
-                "STRUCTURE_OK", 
-                "STRUCTURE_FIXED_1", 
-                "STRUCTURE_FIXED_2", 
-                "STRUCTURE_FIXED_3", 
-                "MULTI_DOC_HANDLED"
+                "STRUCTURE_OK", "STRUCTURE_FIXED_1", "STRUCTURE_FIXED_2", 
+                "STRUCTURE_FIXED_3", "MULTI_DOC_HANDLED"
             }
-            is_structural_success = status in success_statuses
-            is_partially_healed = (
-                status.startswith("STRUCTURE_FAIL") and 
-                final_yaml != lexed_content and 
-                final_yaml.strip()
-            )
             
+            is_structural_success = status in success_statuses
+            
+            # Mark as partially healed if the output is different from input
+            # but the structural parser didn't fully give a green light.
+            is_partially_healed = (
+                not is_structural_success and 
+                final_yaml != raw_content
+            )
+
+            # If user wants to FORCE, we treat a partial heal as a success
+            actual_success = is_structural_success
+            if force_write and is_partially_healed:
+                actual_success = True  
+            # --- AGGRESSIVE LOGIC END ---
+
             return {
                 "content": final_yaml,
                 "status": status,
                 "report": report,
-                "success": is_structural_success,           # ✅ kubectl apply -f ready
-                "partial_heal": is_partially_healed,        # ⚠️ CLI warning trigger
+                "success": actual_success, 
+                "partial_heal": is_partially_healed,
                 "phase1_complete": True,
                 "input_type": "string" if file_path is None else "file",
                 "input_size_bytes": content_bytes
