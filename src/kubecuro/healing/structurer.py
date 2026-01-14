@@ -55,15 +55,8 @@ class KubeStructurer:
             return -1
 
     def _apply_magnetic_snap(self, yaml_str: str) -> str:
-        """
-        HIERARCHY EXPANDER: Forces nested lists to be deeper than their parents.
-        Specifically fixes the Container -> Env alignment trap.
-        """
         lines = yaml_str.splitlines()
         snapped_lines = []
-        
-        # Track the last 'anchor' indentation for dashes
-        last_dash_indent = -1
         
         for line in lines:
             stripped = line.lstrip()
@@ -71,30 +64,21 @@ class KubeStructurer:
                 snapped_lines.append(line)
                 continue
             
-            if self._is_protected_structure(line):
-                last_dash_indent = -1
-                snapped_lines.append(line)
-                continue
+            # Calculate actual leading spaces
+            original_indent = len(line) - len(stripped)
             
-            current_indent = len(line) - len(stripped)
-            # Standard grid snap
-            snapped_indent = round(current_indent / 2) * 2
+            # FORCE EVEN INDENTATION (The 2-Space Rule)
+            # If it's 9, it becomes 8. If it's 11, it becomes 10.
+            new_indent = (original_indent // 2) * 2
+            
+            # SPECIAL CASE: The "Stuck Dash" usually needs 2 extra spaces
+            # if it's a nested list like 'env' inside 'containers'
+            if stripped.startswith('- ') and original_indent % 2 != 0:
+                # If we were at an odd column (like 9 or 11), 
+                # we likely intended to be deeper than the parent.
+                new_indent = ((original_indent + 1) // 2) * 2
 
-            if stripped.startswith('- '):
-                # If we've seen a dash before, and this new dash is at the 
-                # same or similar level but was ORIGINALLY deeper, 
-                # force it to be at least 2 spaces deeper than the parent dash.
-                if last_dash_indent != -1:
-                    if current_indent > last_dash_indent and snapped_indent <= last_dash_indent:
-                        snapped_indent = last_dash_indent + 2
-                
-                last_dash_indent = snapped_indent
-            else:
-                # Reset if we move back out to a parent key
-                if snapped_indent < last_dash_indent:
-                    last_dash_indent = -1
-
-            snapped_lines.append(" " * snapped_indent + stripped)
+            snapped_lines.append(" " * new_indent + stripped)
         
         return "\n".join(snapped_lines)
 
