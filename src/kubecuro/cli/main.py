@@ -53,12 +53,11 @@ class KubeCuroCLI:
     def _get_catalog_path(self) -> str:
         """
         Retrieves the location of the K8s schema catalog dynamically.
-        Uses relative pathing to ensure the tool is portable across environments.
+        Uses relative pathing to ensure portability.
         """
-        # Start at the directory of the current script
         base_path = Path(__file__).resolve().parent
         
-        # Check standard locations: same dir, parent (src), or root
+        # Search priority: catalog/, src/catalog/, or root catalog/
         search_locations = [
             base_path / "catalog" / "k8s_v1_distilled.json",
             base_path.parent / "catalog" / "k8s_v1_distilled.json",
@@ -85,14 +84,16 @@ class KubeCuroCLI:
         fix_parser.add_argument("--yes-all", action="store_true", help="Auto-confirm batch operations")
         fix_parser.add_argument("--force", action="store_true", help="Force write even partial heals")
         fix_parser.add_argument("--ext", default=".yaml", help="File extension filter (default: .yaml)")
-        fix_parser.add_argument("--strict", action="store_true", help="Fail if unknown fields (typos) are found")
+        fix_parser.add_argument("--strict", action="store_true", help="Fail if unknown fields are found")
 
         # 'scan' subcommand - Read-only audit mode
         scan_parser = subparsers.add_parser("scan", help="🔍 Audit manifests for errors")
         scan_parser.add_argument("path", help="Path to scan")
+        # Included dry-run in scan parser for argument consistency
+        scan_parser.add_argument("--dry-run", action="store_true", default=True, help="Execute in read-only mode")
         scan_parser.add_argument("--ext", default=".yaml", help="File extension filter")
         scan_parser.add_argument("--diff", action="store_true", help="Show suggested changes in preview")
-        scan_parser.add_argument("--strict", action="store_true", help="Fail if unknown fields (typos) are found")
+        scan_parser.add_argument("--strict", action="store_true", help="Fail if unknown fields are found")
 
     def print_header(self, subtitle: str):
         """Renders the KubeCuro splash header with themed styling."""
@@ -104,10 +105,7 @@ class KubeCuroCLI:
         ))
 
     def _show_side_by_side_diff(self, file_path: str, old_content: str, new_content: str):
-        """
-        Renders side-by-side comparison. Height is removed to allow natural 
-        scrolling for large manifests.
-        """
+        """Renders a vertical side-by-side comparison of original vs healed YAML."""
         old_syntax = Syntax(old_content.strip(), "yaml", theme="ansi_dark", line_numbers=True)
         new_syntax = Syntax(new_content.strip(), "yaml", theme="monokai", line_numbers=True)
 
@@ -128,17 +126,17 @@ class KubeCuroCLI:
 
     def _confirm_action(self, target_count: int, args: argparse.Namespace) -> bool:
         """Safety Gate logic: ensures the user wants to proceed with writes."""
-        if args.dry_run:
+        if getattr(args, 'dry_run', False):
             return True
         
         if target_count == 1:
-            if args.yes or args.yes_all:
+            if getattr(args, 'yes', False) or getattr(args, 'yes_all', False):
                 return True
             choice = console.input("\n[bold yellow]Apply fix to this file? (y/N): [/bold yellow]").lower()
             return choice == 'y'
         
         if target_count > 1:
-            if args.yes_all:
+            if getattr(args, 'yes_all', False):
                 return True
             
             console.print(Panel(
@@ -161,6 +159,7 @@ class KubeCuroCLI:
             console.print(f"[bold red]Error:[/bold red] Path '{args.path}' not found.")
             return
 
+        # Workspace is the boundary for relative path calculations
         workspace = input_path if input_path.is_dir() else input_path.parent
         catalog_path = self._get_catalog_path()
         if not catalog_path:
@@ -169,7 +168,7 @@ class KubeCuroCLI:
 
         engine = AuditEngineV3(str(workspace), catalog_path)
         
-        # Determine targets (single file vs recursive directory)
+        # Collect target files based on input type
         if input_path.is_file():
             target_files = [input_path]
         else:
@@ -182,7 +181,7 @@ class KubeCuroCLI:
             console.print(f"\n[bold yellow]⚠️  No valid YAML files found.[/bold yellow]")
             return
 
-        # Confirm before starting if we are in fix mode
+        # Safety confirmation for 'fix' mode
         if is_fix_mode and not self._confirm_action(len(target_files), args):
             console.print("[bold red]Operation cancelled by user.[/bold red]")
             return
@@ -203,17 +202,19 @@ class KubeCuroCLI:
                 try:
                     rel_path = str(file_path.relative_to(workspace))
                     old_content = file_path.read_text(encoding='utf-8-sig')
+                    
+                    # Determine if this specific run should write to disk
+                    is_dry_run = getattr(args, 'dry_run', False) or not is_fix_mode
 
-                    # Core execution
                     report = engine.audit_and_heal_file(
                         rel_path,
-                        dry_run=args.dry_run or not is_fix_mode,
+                        dry_run=is_dry_run,
                         force_write=getattr(args, 'force', False),
                         strict=args.strict
                     )
                     reports.append(report)
 
-                    # Toggle diff UI if requested
+                    # Toggle diff UI if requested and modifications were found
                     if args.diff and report.get('healed_content'):
                         progress.stop()
                         console.print(f"\n[bold cyan]Analysis for: {rel_path}[/bold cyan]")
@@ -236,7 +237,7 @@ class KubeCuroCLI:
         self._render_final_report(reports, engine)
 
     def _render_final_report(self, reports: List[Dict], engine: Any):
-        """Constructs the final summary table and metrics panel for the user."""
+        """Constructs the final summary table and metrics panel."""
         table = Table(title="KubeCuro Execution Report", show_lines=True, header_style="bold magenta")
         table.add_column("File Path", style="cyan")
         table.add_column("Kind", style="white")
@@ -244,6 +245,7 @@ class KubeCuroCLI:
         table.add_column("Result", justify="center")
 
         for r in reports:
+            # Handle system-level crashes explicitly in the UI
             if r.get('status') == "ENGINE_ERROR":
                 console.print(f"[bold red]Error in {r['file_path']}:[/bold red] {r.get('error')}")
             
@@ -259,6 +261,8 @@ class KubeCuroCLI:
             )
 
         console.print(table)
+        
+        # Retrieve computed statistics from the Engine
         summary = engine.generate_summary(reports)
         console.print(Panel(
             f"[bold white]Summary Report[/bold white]\n"
@@ -271,7 +275,7 @@ class KubeCuroCLI:
         ))
 
     def run(self):
-        """Primary routing entry point."""
+        """Primary routing entry point for CLI commands."""
         if len(sys.argv) == 1:
             self.print_header("K8s Diagnostics & Healer")
             self.parser.print_help()
@@ -289,6 +293,7 @@ class KubeCuroCLI:
 
 def main():
     """Application entry point with interrupt handling."""
+    # Initialization message
     print("🚀 KubeCuro v0.1.0 starting...")
     try:
         KubeCuroCLI().run()

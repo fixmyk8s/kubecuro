@@ -214,15 +214,27 @@ class AuditEngineV3:
     def generate_summary(self, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Provides SRE-style performance summary of a scan run."""
         if not reports:
-            return {"total_files": 0, "success_rate": 0}
+            return {
+                "total_files": 0, 
+                "success_rate": 0, 
+                "successful": 0, 
+                "system_errors": 0, 
+                "backups_created": 0
+            }
         total = len(reports)
         successful = sum(1 for r in reports if r.get('success', False))
         writes = sum(1 for r in reports if r.get('written', False))
+        backups_count = sum(1 for r in reports if r.get('backup_created') is not None)
+        # Count reports that resulted in an ENGINE_ERROR
+        system_errors = sum(1 for r in reports if r.get('status') == "ENGINE_ERROR")
+        
         return {
             "total_files": total,
             "success_rate": (successful / total) if total > 0 else 0,
             "successful": successful,
             "written_to_disk": writes,
+            "backups_created": backups_count,     # Required by main.py
+            "system_errors": system_errors, # Required by main.py
             "summary_timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -264,4 +276,4 @@ class AuditEngineV3:
         return warnings
 
     def _file_error(self, path: str, status: str, error: str) -> Dict[str, Any]:
-        return {"file_path": path, "status": status, "error": error, "success": False, "partial_heal": False}
+        return {"file_path": path, "status": status, "error": error, "success": False, "partial_heal": False, "system_errors": error, "kind": "Unknown"}
