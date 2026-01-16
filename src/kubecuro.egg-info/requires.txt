@@ -1,6 +1,0 @@
-ruamel.yaml>=0.17.21
-rich>=12.0.0
-
-[dev]
-pytest>=7.0
-black>=22.0

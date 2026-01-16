@@ -22,22 +22,7 @@ from kubecuro.healing.scanner import KubeScanner
 from kubecuro.healing.shadow import KubeShadow
 from kubecuro.healing.structurer import KubeStructurer
 from kubecuro.core.models import Shard
-
-@dataclass
-class HealContext:
-    """
-    The 'Medical File': A unified container for data and metadata.
-    This state object is passed between the pipeline stages and eventually 
-    consumed by the Structurer (Surgeon) to perform reconstruction.
-    """
-    raw_text: str
-    shards: List[Shard] = field(default_factory=list)
-    shadow_map: Optional[KubeShadow] = None
-    kind: Optional[str] = None
-    api_version: Optional[str] = None
-    # Storage for the final reconstructed objects (CommentedMaps)
-    # Defaulting to an empty list to prevent NoneType errors in the Exporter
-    reconstructed_docs: List[Any] = field(default_factory=list)
+from kubecuro.healing.context import HealContext
 
 class HealingPipeline:
     """

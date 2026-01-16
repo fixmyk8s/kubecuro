@@ -83,7 +83,7 @@ class AuditEngineV3:
             self.workspace.mkdir(parents=True, exist_ok=True)
 
     def audit_and_heal_file(self, relative_path: str, dry_run: bool = True, 
-                            force_write: bool = False) -> Dict[str, Any]:
+                            force_write: bool = False, strict: bool = False) -> Dict[str, Any]:
         """
         Performs a full audit and healing cycle on a single file.
         
@@ -91,6 +91,7 @@ class AuditEngineV3:
             relative_path: The path to the file relative to the workspace root.
             dry_run: If True, content is processed but not written to disk.
             force_write: If True, allows writing even if the heal was only partial.
+            strict: If True, fails validation on unknown fields (typos).
             
         Returns:
             A dictionary (report) containing the status, healed content, and logic logs.
@@ -118,7 +119,6 @@ class AuditEngineV3:
             raw_text = full_path.read_text(encoding='utf-8-sig')
 
             # Pass 1: Lexical Pipeline (Lexer -> Shadow -> Scanner -> Structurer)
-            # This returns a HealContext containing the reconstructed_docs
             context = self.pipeline.run(raw_text)
             healed_docs = context.reconstructed_docs or []
             
@@ -131,7 +131,8 @@ class AuditEngineV3:
                 protected_doc, logs = self.shield.protect(doc)
                 
                 # Validation: Ensuring the heal didn't break K8s structural logic
-                valid, err = self.validator.validate_reconstruction(protected_doc)
+                # FIXED: 'strict' is now correctly linked from the method signature
+                valid, err = self.validator.validate_reconstruction(protected_doc, strict=strict)
                 if not valid:
                     validation_passed = False
                     validation_error = err
@@ -246,7 +247,7 @@ class AuditEngineV3:
             raise IOError(f"Atomic write failed: {str(e)}")
 
     def scan_directory(self, extension: str = ".yaml", dry_run: bool = True, 
-                       force_write: bool = False, max_depth: int = 10,
+                       force_write: bool = False, strict: bool = False, max_depth: int = 10,
                        progress_callback: Optional[Callable[[int, int], None]] = None) -> List[Dict[str, Any]]:
         """
         Recursively discovers and processes all YAML files within the workspace.
@@ -264,13 +265,14 @@ class AuditEngineV3:
 
         for file_path in all_files:
             try:
-                # Enforce directory depth limits to prevent infinite recursion in complex repos
+                # Enforce directory depth limits to prevent infinite recursion
                 depth = len(file_path.relative_to(self.workspace).parts)
                 if depth > max_depth:
                     continue
                 
                 rel_path = str(file_path.relative_to(self.workspace))
-                report = self.audit_and_heal_file(rel_path, dry_run, force_write)
+                # FIXED: Correctly passing 'strict' argument to avoid TypeError
+                report = self.audit_and_heal_file(rel_path, dry_run, force_write, strict=strict)
                 reports.append(report)
                 
             except Exception as e:
@@ -286,7 +288,7 @@ class AuditEngineV3:
     def cleanup_backups(self, max_age_hours: int = 168) -> int:
         """
         Maintenance utility to remove old .kubecuro.backup files.
-        Default is 168 hours (7 days) to cover a full weekly cycle.
+        Default is 168 hours (7 days).
         """
         count = 0
         cutoff = time.time() - (max_age_hours * 3600)
@@ -315,15 +317,13 @@ class AuditEngineV3:
                 if "*.kubecuro.backup" not in content:
                     warnings.append(
                         "Recommendation: Add '*.kubecuro.backup' to .gitignore. "
-                        "WHY: Prevents snapshot files from being accidentally committed, "
-                        "keeping your PRs clean and focused on actual manifest changes."
+                        "WHY: Prevents snapshot files from being accidentally committed."
                     )
                 
                 if "*.kubecuro.tmp" not in content:
                     warnings.append(
                         "Recommendation: Add '*.kubecuro.tmp' to .gitignore. "
-                        "WHY: Prevents 'half-written' temporary files from entering the "
-                        "repo if a process is interrupted, avoiding 'ghost' file issues."
+                        "WHY: Prevents 'half-written' temporary files from entering the repo."
                     )
             except Exception:
                 pass

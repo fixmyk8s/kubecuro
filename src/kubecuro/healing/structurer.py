@@ -12,7 +12,7 @@ Date: 2026-01-16
 
 from typing import Any, Dict, List, Optional
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
-from kubecuro.healing.pipeline import HealContext
+from kubecuro.healing.context import HealContext
 
 class KubeStructurer:
     """
@@ -51,7 +51,7 @@ class KubeStructurer:
         if current_shards:
             all_documents.append(self._build_tree(current_shards, context.kind))
 
-        # IMPORTANT: Store back in context for the Exporter and Engine
+        # Store back in context for the Exporter and Engine
         context.reconstructed_docs = all_documents
         return all_documents
 
@@ -69,9 +69,10 @@ class KubeStructurer:
                 doc_kind = s.value
                 break
         
+        # Safe lookup in catalog; default to empty dict if kind unknown
         kind_schema = self.catalog.get(doc_kind, {})
         
-        # 2. Stack Setup: [(indent_level, container_ref, schema_node, is_list_item)]
+        # 2. Stack Setup: [(indent_level, container_ref, schema_node, is_in_list)]
         # Indent -1 is the root of the document
         stack = [(-1, rebuilt_tree, kind_schema, False)]
 
@@ -80,29 +81,29 @@ class KubeStructurer:
             while len(stack) > 1 and shard.indent <= stack[-1][0]:
                 stack.pop()
 
-            parent_indent, parent_container, parent_schema, _ = stack[-1]
+            parent_indent, parent_container, parent_schema, is_in_list = stack[-1]
 
             # 3. Catalog Lookup for the current key
-            field_info = parent_schema.get("fields", {}).get(shard.key, {})
+            # Safely navigate the schema nested structure
+            field_info = {}
+            if parent_schema and "fields" in parent_schema:
+                field_info = parent_schema["fields"].get(shard.key, {})
+            
             field_type = field_info.get("type")
 
             # 4. Handle List Item Indicators ('- key: value')
-            # If the shard is a list item, we may need to inject a CommentedMap into a CommentedSeq
+            # If the shard is a list item, ensure we are inside a CommentedSeq
             if shard.is_list_item:
-                # Ensure the parent is a list
                 if not isinstance(parent_container, CommentedSeq):
-                    # This handles cases where the Lexer sees a '-' but the schema is uncertain
-                    list_node = CommentedSeq()
-                    if shard.key in parent_container:
-                         # Merge logic if key already exists, otherwise assign
-                         parent_container[shard.key] = list_node
-                    
-                # Create a new map for this specific list entry
-                item_map = CommentedMap()
-                parent_container.append(item_map)
-                
-                # Update the target container for the current shard's value
-                target_container = item_map
+                    # Fallback: if schema didn't predict a list, force one
+                    new_seq = CommentedSeq()
+                    parent_container[shard.key] = new_seq
+                    target_container = CommentedMap()
+                    new_seq.append(target_container)
+                else:
+                    # Current container is already a list, add a new map entry
+                    target_container = CommentedMap()
+                    parent_container.append(target_container)
             else:
                 target_container = parent_container
 
@@ -111,7 +112,8 @@ class KubeStructurer:
                 # Prepare a sequence for the children to inhabit
                 new_seq = CommentedSeq()
                 target_container[shard.key] = new_seq
-                # Push the sequence to the stack so children (list items) know where to go
+                
+                # Push the sequence to the stack
                 stack.append((shard.indent, new_seq, field_info, True))
 
             elif field_type == "object" or (shard.value is None and not shard.is_list_item):
@@ -119,18 +121,18 @@ class KubeStructurer:
                 new_map = CommentedMap()
                 target_container[shard.key] = new_map
                 
-                # Attach comments to the key if present
+                # Attach start comments if they exist
                 if shard.comment:
                     new_map.yaml_set_start_comment(shard.comment)
                 
                 stack.append((shard.indent, new_map, field_info, False))
 
             else:
-                # Leaf Node Assignment
+                # Leaf Node Assignment (Key: Value)
                 val = self._clean_value(shard.value)
                 target_container[shard.key] = val
                 
-                # Attach end-of-line comments
+                # Attach end-of-line comments if they exist
                 if shard.comment:
                     target_container.yaml_add_eol_comment(shard.comment, key=shard.key)
 
@@ -140,6 +142,8 @@ class KubeStructurer:
         """Strips quotes and normalizes types from the Lexer."""
         if isinstance(val, str):
             val = val.strip()
-            if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
+            # Remove wrapping quotes often found in corrupted YAML
+            if (val.startswith("'") and val.endswith("'")) or \
+               (val.startswith('"') and val.endswith('"')):
                 return val[1:-1]
         return val
