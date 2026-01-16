@@ -294,7 +294,9 @@ class KubeCuroCLI:
 def main():
     """Application entry point with interrupt handling."""
     # Initialization message
-    print("🚀 KubeCuro v0.1.0 starting...")
+    print("\033[1;36m" + "="*80 + "\033[0m")
+    print("\033[1;33m🚀  KubeCuro v0.1.0 starting...\033[0m")
+    print("\033[1;36m" + "="*80 + "\033[0m")
     try:
         KubeCuroCLI().run()
     except KeyboardInterrupt:
