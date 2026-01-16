@@ -1,8 +1,18 @@
+# KubeCuro Artifacts
+*.kubecuro.backup
+*.kubecuro.tmp
+
+# Test Data
+kubecuro_chaos_test/
+kubecuro_rigor_test/
+
+# Python Environment
 __pycache__/
 *.py[cod]
-.venv/
+*$py.class
+venv/
 .env
-*.tmp
 .pytest_cache/
 dist/
 build/
+*.tmp

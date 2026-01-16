@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=64.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,39 +17,46 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
+    
 ]
 
 # External Dependencies
 dependencies = [
     "ruamel.yaml>=0.17.21",
-    "rich>=12.0.0",  # For the beautiful CLI output we'll build next
+    "rich>=12.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "black>=22.0",
+    "mypy>=1.0",
 ]
 
-# This is the "Magic" part: It creates a 'kubecuro' command in your terminal
+# --- THE CORRECTED ENTRY POINT ---
+# Maps to: src/kubecuro/cli/main.py -> function main()
 [project.scripts]
-kubecuro = "kubecuro.cli:main"
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-kubecuro = ["assets/*"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests"]
+kubecuro = "kubecuro.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/fixmyk8s/kubecuro"
 Issues = "https://github.com/fixmyk8s/kubecuro/issues"
 Repository = "https://github.com/fixmyk8s/kubecuro.git"
+
+# --- SETUPTOOLS CONFIGURATION ---
+[tool.setuptools]
+# Tells setuptools that 'src' is the root of your code
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+# Automatically find kubecuro, kubecuro.cli, kubecuro.core, etc.
+where = ["src"]
+exclude = ["tests*", "catalog*"]
+
+[tool.setuptools.package-data]
+# Ensures your distilled JSON maps are included in the package
+kubecuro = ["assets/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

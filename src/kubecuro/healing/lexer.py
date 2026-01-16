@@ -1,43 +1,18 @@
-"""
-KUBECURO LEXER - Phase 1.1 (The Refurbisher)
---------------------------------------------
-PURPOSE: 
-Fixes character-level syntax errors in "Dead" YAML before the structural parser 
-(ruamel.yaml) takes over. This ensures the parser doesn't crash on simple 
-formatting typos.
-
-SOLVED CASES (15):
-1.  TAB REMOVAL: Converts illegal '\t' characters to 2 spaces.
-2.  STUCK COLONS: Fixes 'kind:Pod' -> 'kind: Pod'.
-3.  STUCK DASHES: Fixes '-image: nginx' -> '- image: nginx'.
-4.  TRAILING WHITESPACE: Cleans ghost spaces while preserving logic.
-5.  ESCAPED QUOTES: Properly handles \" inside double-quoted strings.
-6.  NESTED QUOTES: Recognizes single quotes inside double quotes and vice versa.
-7.  QUOTED COLONS: Prevents splitting on colons inside "https://..." URLs.
-8.  INLINE COMMENTS: Normalizes spacing between values and '#' comments.
-9.  QUOTED HASHMARKS: Protects "Tag #42" from being treated as a comment.
-10. SPACE-AWARE COMMENTS: Only treats '#' as a comment if preceded by a space.
-11. PURE COMMENT CLEANING: Trims trailing spaces on lines that are only comments.
-12. BLOCK SCALAR PROTECTION: Detects '|' and '>' and stops modification of inner text.
-13. BLOCK AUTO-EXIT: Calculates indents to know when a sacred script block ends.
-14. BACKSLASH WRAPPING: Detects '\' continuation and protects the next line's indent.
-15. EMPTY KEY HANDLING: Safely handles keys with comments but no values.
-"""
-
 import re
 
-class RawLexer:
+class KubeLexer:
+    """
+    KUBECURO LEXER - The Refurbisher (Phase 1.1)
+    --------------------------------------------
+    Incorporates 15 structural fixes including block protection,
+    stuck colon/dash repair, and quote-aware comment splitting.
+    """
     def __init__(self):
-        # FIX: Updated Group 1 (\s*-?\s*) to actually capture the dash if it exists
-        self.kv_pattern = re.compile(r'^(\s*-?\s*)([^#:"\']+)\s*:\s*(.*)$')
         self.in_block = False
         self.block_indent = 0
-        self.skip_next = False
-
-    def is_likely_new_key(self, line: str) -> bool:
-        return bool(self.kv_pattern.match(line))
 
     def _find_comment_split(self, text: str) -> int:
+        """Protects quotes and # symbols inside values."""
         in_double_quote = False
         in_single_quote = False
         escaped = False
@@ -58,79 +33,59 @@ class RawLexer:
         return -1
 
     def repair_line(self, line: str) -> str:
-        line = line.replace('\t', '  ')
-        if not line.strip(): return line
-
-        if self.skip_next:
-            processed_line = line.rstrip()
-            self.skip_next = processed_line.endswith('\\')
-            return processed_line
-
-        current_content = line.lstrip()
-        current_indent = len(line) - len(current_content)
+        # 1. Tabs & Basic Cleaning (Case 1 & 4)
+        raw_line = line.replace('\t', '  ').rstrip()
+        content = raw_line.lstrip()
+        if not content: return raw_line
         
+        indent = len(raw_line) - len(content)
+
+        # 2. Block Protection (Case 12 & 13)
         if self.in_block:
-            if current_indent <= self.block_indent and self.is_likely_new_key(line):
-                self.in_block = False 
+            if indent <= self.block_indent and (':' in content or content.startswith('-')):
+                self.in_block = False
             else:
-                return line
+                return raw_line
 
-        if current_content.startswith('#'):
-            return line.rstrip()
+        # 3. Comment Separation (Case 8, 9, 10)
+        split_idx = self._find_comment_split(raw_line)
+        if split_idx != -1:
+            code_part = raw_line[:split_idx]
+            comment_part = raw_line[split_idx:]
+        else:
+            code_part = raw_line
+            comment_part = ""
 
-        match = self.kv_pattern.match(line)
-        if match:
-            prefix, key, remainder = match.groups()
-            
-            # --- INTELLIGENT SPACING (The fix we discussed) ---
-            if prefix.endswith('-'):
-                cleaned = f"{prefix} {key.strip()}:"
-            else:
-                cleaned = f"{prefix}{key.strip()}:"
+        # 4. SURGICAL FIXES (Case 2 & 3)
+        # Fix Stuck Dash: '-image' -> '- image'
+        if code_part.lstrip().startswith('-') and len(code_part.lstrip()) > 1:
+            if code_part.lstrip()[1].isalpha():
+                code_part = code_part.replace('-', '- ', 1)
 
-            # Split value/comment
-            split_idx = self._find_comment_split(remainder)
-            if split_idx != -1:
-                val_part = remainder[:split_idx].rstrip()
-                comment_part = remainder[split_idx:].strip()
-            else:
-                val_part = remainder.strip()
-                comment_part = ""
+        # Fix Stuck Colon: 'kind:Pod' -> 'kind: Pod' (Case 2, 7)
+        # PROTECT IMAGE TAGS: nginx:1.14
+        if not re.search(r'image[:\s]*[a-zA-Z0-9/]', code_part):
+            code_part = re.sub(r'(?<!http)(?<!https):(?!\s)([a-zA-Z])', r': \1', code_part)
 
-            # State Triggers
-            if val_part.endswith('\\'): self.skip_next = True
-            if val_part in ['|', '|-', '>', '>-']:
-                self.in_block = True
-                self.block_indent = current_indent
+        # 5. State Management
+        if any(marker in code_part for marker in ['|', '>', '|-', '>-']):
+            self.in_block = True
+            self.block_indent = indent
 
-            # --- RECONSTRUCTION (Append values and comments) ---
-            if val_part: 
-                cleaned += f" {val_part}"
-            if comment_part: 
-                cleaned += f"  {comment_part}"
-            return cleaned
+        return code_part + comment_part
 
-        return line.rstrip()
-
-    def process_string(self, raw_yaml: str) -> str:
-        # 1. Standardize Tabs
-        content = raw_yaml.replace('\t', '  ')
-        
-        # 2. Fix Stuck Dashes: "-name" -> "- name"
-        content = re.sub(r'^(\s*)-(\w)', r'\1- \2', content, flags=re.MULTILINE)
-        
-        # 3. Improved Colon Fix
-        fixed_lines = []
-        for line in content.splitlines():
-            # Match start of line -> indent -> key -> colon -> NO space -> value
-            # Example: "  image:nginx:latest" -> "  image: nginx:latest"
-            # This regex captures the key and the colon, then ensures a space follows.
-            line = re.sub(r'^(\s*(?:-\s*)?[\w\.\-\/]+):([^\s\n])', r'\1: \2', line)
-            fixed_lines.append(line)
-        
-        content = "\n".join(fixed_lines)
-
+    def repair(self, raw_yaml: str) -> str:
+        """
+        The entry point used by HealingPipeline.
+        Orchestrates line-by-line repair while handling block states.
+        """
         self.in_block = False
-        self.skip_next = False
-        # Phase 2: Line-by-line repair (for comments and trailing chars)
-        return "\n".join([self.repair_line(l) for l in content.splitlines()])
+        lines = raw_yaml.splitlines()
+        fixed = []
+        for i, line in enumerate(lines):
+            # Recovery for flush-left list items
+            if i > 0 and lines[i-1].rstrip().endswith(':') and line.startswith('-'):
+                p_indent = len(lines[i-1]) - len(lines[i-1].lstrip())
+                line = (' ' * (p_indent + 2)) + line
+            fixed.append(self.repair_line(line))
+        return "\n".join(fixed)

@@ -1,228 +1,145 @@
-import io
-import re
-import sys
-import argparse
-from typing import Tuple, Union, List, Dict, Any
-from pathlib import Path
-
-# External Dependencies
-from ruamel.yaml import YAML, YAMLError
-from ruamel.yaml.parser import ParserError
-from ruamel.yaml.scanner import ScannerError
-
-from kubecuro.healing.lexer import RawLexer
-
+#!/usr/bin/env python3
 """
-KUBECURO STRUCTURER - Phase 1.2 (The Architect) - ENTERPRISE GRADE
-------------------------------------------------------------------
-PURPOSE: Handles ALL indentation disasters (0-∞ spaces) + 8 critical edge cases.
-INTEGRATED: Magnetic Snap Alignment (Forces 2-space grid).
+KUBECURO STRUCTURER - Comment-Aware & Multi-Doc Reconstruction
+--------------------------------------------------------------
+This module transforms flat Lexer shards into hierarchical trees.
+It uses a stack-based approach to rebuild the YAML structure while
+supporting multiple Kubernetes documents within a single file.
+
+Author: Nishar A Sunkesala / KubeCuro Team
+Date: 2026-01-16
 """
+
+from typing import Any, Dict, List, Optional
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from kubecuro.healing.pipeline import HealContext
 
 class KubeStructurer:
-    def __init__(self):
-        self.yaml = YAML()
-        self.yaml.preserve_quotes = True
-        # Standard Kubernetes Indentation
-        self.yaml.indent(mapping=2, sequence=4, offset=2)
-        self.yaml.width = 4096
+    """
+    The Architect: Rebuilds the YAML tree from identified shards.
+    Uses the K8s catalog to enforce correct types (arrays vs objects)
+    and handles multiple documents separated by '---'.
+    """
 
-    def _normalize_line_endings(self, yaml_str: str) -> str:
-        """FIX 1+4: CRLF, LF, CR → Unix LF (all platforms)."""
-        return yaml_str.replace('\r\n', '\n').replace('\r', '\n').rstrip()
-
-    def _is_anchor_or_alias(self, line: str) -> bool:
-        """FIX 3: Detect &anchor and *alias lines - preserve exactly."""
-        content = line.strip()
-        return bool(re.match(r'^[ \t]*[&*][a-zA-Z0-9_-]+', content))
-
-    def _is_protected_structure(self, line: str) -> bool:
-        """Protect YAML directives, anchors, block scalars from indent changes."""
-        content = line.strip()
-        return (content.startswith(('%YAML', '%TAG', '---', '...')) or 
-                self._is_anchor_or_alias(line) or
-                content.startswith(('|', '>')))
-
-    def _extract_line(self, error_info: str) -> int:
-        """Parse ruamel.yaml error location from STRUCTURE_ERROR:L5:C3 format."""
-        if not error_info.startswith("STRUCTURE_ERROR:L"):
-            return -1
-        try:
-            line_part = error_info.split(':')[1]  # L5
-            line_num_1based = int(line_part[1:])
-            return line_num_1based - 1
-        except (IndexError, ValueError, AttributeError):
-            return -1
-
-    def _apply_magnetic_snap(self, yaml_str: str) -> str:
-        lines = yaml_str.splitlines()
-        snapped_lines = []
+    def __init__(self, catalog: Dict[str, Any]):
+        """
+        Initializes the structurer with a reference schema.
         
-        # Track the "Anchor" indentation (the level of the current list item)
-        current_anchor = 0
-        in_list_item = False
-        
-        for line in lines:
-            stripped = line.lstrip()
-            if not stripped:
-                snapped_lines.append("")
-                continue
-            if stripped.startswith('#') or self._is_protected_structure(line):
-                snapped_lines.append(line)
-                continue
-                
-            original_indent = len(line) - len(stripped)
-            
-            if stripped.startswith('- '):
-                # This is a new list item. Snap it to the grid.
-                new_indent = (original_indent // 2) * 2
-                current_anchor = new_indent
-                in_list_item = True
-            elif in_list_item and original_indent > current_anchor:
-                # This is a child of the dash (like 'value:' after '- name:')
-                # It MUST be indented further than the dash anchor.
-                new_indent = current_anchor + 2
+        Args:
+            catalog: The distilled K8s API schema used to determine field types.
+        """
+        self.catalog = catalog
+
+    def reconstruct(self, context: HealContext) -> List[CommentedMap]:
+        """
+        Translates Lexer shards into a list of comment-preserving CommentedMaps.
+        Updates the context with the final reconstructed documents.
+        """
+        all_documents = []
+        current_shards = []
+
+        # Step 1: Split shards into groups based on the '---' separator
+        for shard in context.shards:
+            if shard.key == "---":
+                if current_shards:
+                    all_documents.append(self._build_tree(current_shards, context.kind))
+                    current_shards = []
             else:
-                # Standard key-value pair
-                new_indent = (original_indent // 2) * 2
-                current_anchor = new_indent
-                in_list_item = False
-            
-            snapped_lines.append(" " * new_indent + stripped.rstrip())
-            
-        return "\n".join(snapped_lines)
+                current_shards.append(shard)
+        
+        # Add the final (or only) document
+        if current_shards:
+            all_documents.append(self._build_tree(current_shards, context.kind))
 
-    def _find_parent_indent(self, lines: List[str], err_line: int) -> int:
+        # IMPORTANT: Store back in context for the Exporter and Engine
+        context.reconstructed_docs = all_documents
+        return all_documents
+
+    def _build_tree(self, shards: List[Any], default_kind: str) -> CommentedMap:
         """
-        FIX 5: Skip empty lines + comments + protected structures.
-        Finds closest mapping key above error line.
+        The core stack-based reconstruction logic for a single YAML document.
+        Handles the distinction between Maps, Sequences, and Leaf nodes.
         """
-        for i in range(err_line - 1, -1, -1):
-            if i < 0: break
-            
-            raw_content = re.split(r'\s+#', lines[i])[0].rstrip()
-            
-            if (not raw_content.strip() or 
-                raw_content.strip().startswith('#') or 
-                self._is_protected_structure(raw_content)):
-                continue
+        rebuilt_tree = CommentedMap()
+        
+        # 1. Identity Detection (Contextual Kind)
+        doc_kind = default_kind
+        for s in shards:
+            if s.key == "kind" and s.value:
+                doc_kind = s.value
+                break
+        
+        kind_schema = self.catalog.get(doc_kind, {})
+        
+        # 2. Stack Setup: [(indent_level, container_ref, schema_node, is_list_item)]
+        # Indent -1 is the root of the document
+        stack = [(-1, rebuilt_tree, kind_schema, False)]
+
+        for shard in shards:
+            # Handle closing of nested scopes (Popping the stack)
+            while len(stack) > 1 and shard.indent <= stack[-1][0]:
+                stack.pop()
+
+            parent_indent, parent_container, parent_schema, _ = stack[-1]
+
+            # 3. Catalog Lookup for the current key
+            field_info = parent_schema.get("fields", {}).get(shard.key, {})
+            field_type = field_info.get("type")
+
+            # 4. Handle List Item Indicators ('- key: value')
+            # If the shard is a list item, we may need to inject a CommentedMap into a CommentedSeq
+            if shard.is_list_item:
+                # Ensure the parent is a list
+                if not isinstance(parent_container, CommentedSeq):
+                    # This handles cases where the Lexer sees a '-' but the schema is uncertain
+                    list_node = CommentedSeq()
+                    if shard.key in parent_container:
+                         # Merge logic if key already exists, otherwise assign
+                         parent_container[shard.key] = list_node
+                    
+                # Create a new map for this specific list entry
+                item_map = CommentedMap()
+                parent_container.append(item_map)
                 
-            content = raw_content.lstrip()
-            if raw_content.endswith(':') and not content.startswith('- '):
-                return len(raw_content) - len(content)
-        return 0
+                # Update the target container for the current shard's value
+                target_container = item_map
+            else:
+                target_container = parent_container
 
-    def _process_single_doc(self, yaml_str: str) -> Tuple[str, str]:
-        """Process single YAML document with iterative fixing."""
-        # NEW: First pass - Magnetic Snap (Brute force alignment)
-        snapped_yaml = self._apply_magnetic_snap(yaml_str)
+            # 5. Type-Specific Insertion
+            if field_type == "array":
+                # Prepare a sequence for the children to inhabit
+                new_seq = CommentedSeq()
+                target_container[shard.key] = new_seq
+                # Push the sequence to the stack so children (list items) know where to go
+                stack.append((shard.indent, new_seq, field_info, True))
 
-        # Step 1: Initial validation
-        valid, result = self.validate_and_roundtrip(snapped_yaml)
-        if valid:
-            return result, "STRUCTURE_OK"
+            elif field_type == "object" or (shard.value is None and not shard.is_list_item):
+                # Prepare a nested map
+                new_map = CommentedMap()
+                target_container[shard.key] = new_map
+                
+                # Attach comments to the key if present
+                if shard.comment:
+                    new_map.yaml_set_start_comment(shard.comment)
+                
+                stack.append((shard.indent, new_map, field_info, False))
 
-        # FIX 6: Iterative multi-error fixing (max 3 attempts)
-        current_yaml = snapped_yaml
-        for attempt in range(3):
-            fixed_yaml = self.auto_fix_indentation(current_yaml, result)
-            
-            # Check if we are stuck on a protected structure
-            err_idx = self._extract_line(result)
-            if err_idx != -1 and err_idx < len(fixed_yaml.splitlines()):
-                if self._is_protected_structure(fixed_yaml.splitlines()[err_idx]):
-                    return current_yaml, "STRUCTURE_PROTECTED_SKIP"
-            
-            valid2, result2 = self.validate_and_roundtrip(fixed_yaml)
-            if valid2:
-                return result2, f"STRUCTURE_FIXED_{attempt+1}"
-            
-            current_yaml = fixed_yaml
-            result = result2 
-        
-        return current_yaml, "STRUCTURE_FAIL"
+            else:
+                # Leaf Node Assignment
+                val = self._clean_value(shard.value)
+                target_container[shard.key] = val
+                
+                # Attach end-of-line comments
+                if shard.comment:
+                    target_container.yaml_add_eol_comment(shard.comment, key=shard.key)
 
-    def _process_multi_doc(self, yaml_str: str) -> str:
-        """FIX 2: Process each --- document separately."""
-        documents = re.split(r'\n(?=---)', yaml_str.strip())
-        fixed_docs = []
-        
-        for doc in documents:
-            if doc.strip():
-                fixed_doc, status = self._process_single_doc(doc)
-                fixed_docs.append(fixed_doc)
-        
-        return '\n---\n'.join(fixed_docs)
+        return rebuilt_tree
 
-    def auto_fix_indentation(self, yaml_str: str, error_info: str) -> str:
-        """Heals specific line-based errors reported by the parser."""
-        err_line = self._extract_line(error_info)
-        if err_line == -1: return yaml_str
-
-        lines = yaml_str.splitlines()
-        if err_line >= len(lines): return yaml_str
-
-        target_line = lines[err_line].replace('\t', '  ')
-        if self._is_protected_structure(target_line): return yaml_str
-
-        current_indent = len(target_line) - len(target_line.lstrip())
-        parent_indent = self._find_parent_indent(lines, err_line)
-        
-        # KUBERNETES HIERARCHY RULE
-        target_indent = parent_indent + 2
-
-        if (current_indent != target_indent or '\t' in target_line or current_indent % 2 != 0):
-            fixed_line = (' ' * target_indent + target_line.lstrip()).rstrip()
-            lines[err_line] = fixed_line
-            return '\n'.join(lines)
-        
-        return yaml_str
-
-    def validate_and_roundtrip(self, clean_yaml: str) -> Tuple[bool, str]:
-        """Structural validation via ruamel.yaml roundtrip."""
-        try:
-            data = self.yaml.load(clean_yaml)
-            output_buffer = io.StringIO()
-            self.yaml.dump(data, output_buffer)
-            return True, output_buffer.getvalue().rstrip()
-        except YAMLError as e:
-            mark = getattr(e, 'problem_mark', getattr(e, 'context_mark', None))
-            if mark:
-                line_num = mark.line + 1
-                col_num = mark.column + 1
-                return False, f"STRUCTURE_ERROR:L{line_num}:C{col_num}:{str(e)}"
-            return False, f"STRUCTURE_ERROR:{str(e)}"
-
-    def process_yaml(self, lexer_output: str) -> Tuple[str, str]:
-        """Phase 1.2 Entry Point."""
-        normalized = self._normalize_line_endings(lexer_output)
-        
-        if '---' in normalized:
-            result = self._process_multi_doc(normalized)
-            return result, "MULTI_DOC_HANDLED"
-        
-        return self._process_single_doc(normalized)
-
-    def full_healing_report(self, original: str, final: str, status: str) -> Dict[str, Any]:
-        """Production-grade healing summary."""
-        original_lines = original.splitlines()
-        final_lines = final.splitlines()
-        changes = []
-        
-        # Only compare up to the shortest file length to avoid zip issues
-        for i, (orig, fixed) in enumerate(zip(original_lines, final_lines)):
-            if orig != fixed:
-                changes.append({
-                    'line': i + 1,
-                    'original': orig,
-                    'fixed': fixed,
-                    'indent_original': len(orig) - len(orig.lstrip()),
-                    'indent_fixed': len(fixed) - len(fixed.lstrip())
-                })
-        
-        return {
-            'status': status,
-            'total_lines': len(original_lines),
-            'lines_changed': len(changes),
-            'changes': changes
-        }
+    def _clean_value(self, val: Any) -> Any:
+        """Strips quotes and normalizes types from the Lexer."""
+        if isinstance(val, str):
+            val = val.strip()
+            if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
+                return val[1:-1]
+        return val

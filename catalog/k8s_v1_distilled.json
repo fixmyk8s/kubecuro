@@ -1,0 +1,40 @@
+{
+  "Pod": {
+    "fields": {
+      "metadata": { "type": "object" },
+      "spec": {
+        "type": "object",
+        "fields": {
+          "containers": { "type": "array", "item_type": "object" },
+          "volumes": { "type": "array", "item_type": "object" },
+          "nodeSelector": { "type": "object" }
+        }
+      }
+    }
+  },
+  "Deployment": {
+    "fields": {
+      "metadata": { "type": "object" },
+      "spec": {
+        "type": "object",
+        "fields": {
+          "replicas": { "type": "integer" },
+          "selector": { "type": "object" },
+          "template": { "ref": "Pod" }
+        }
+      }
+    }
+  },
+  "Service": {
+    "fields": {
+      "metadata": { "type": "object" },
+      "spec": {
+        "type": "object",
+        "fields": {
+          "ports": { "type": "array", "item_type": "object" },
+          "selector": { "type": "object" }
+        }
+      }
+    }
+  }
+}
