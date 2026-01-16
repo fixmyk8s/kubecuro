@@ -4,7 +4,7 @@ KUBECURO LOGIC SHIELD - Policy Enforcement
 ------------------------------------------
 The ShieldEngine acts as a 'Gatekeeper'. It evaluates parsed Kubernetes 
 manifests against organizational standards and best practices, 
-injecting missing fields or correcting dangerous configurations.
+injecting missing fields or hardening configurations.
 
 Author: Nishar A Sunkesala / KubeCuro Team
 Date: 2026-01-16
@@ -20,12 +20,12 @@ class ShieldEngine:
     It doesn't just fix broken text; it hardens the configuration.
     """
     
-    def __init__(self):
+    def __init__(self, cpu_limit: str = "500m", mem_limit: str = "512Mi"):
         """
-        Initializes the Shield with baseline security and operational defaults.
+        Initializes the Shield with configurable baseline defaults.
         """
-        self.default_cpu_limit = "500m"
-        self.default_mem_limit = "512Mi"
+        self.default_cpu_limit = cpu_limit
+        self.default_mem_limit = mem_limit
         
         # Registry of active rules to be executed against every document
         self.active_rules = [
@@ -36,18 +36,19 @@ class ShieldEngine:
     def protect(self, doc: Any) -> Tuple[Any, List[str]]:
         """
         Runs the document through a gauntlet of safety checks.
+        Returns the modified document and a list of human-readable changes.
         """
         changes = []
         
+        # Safety check: only process dictionary-like objects
         if not isinstance(doc, (dict, CommentedMap)):
             return doc, []
 
         for rule in self.active_rules:
-            result = rule(doc)
-            if result and isinstance(result, tuple):
-                doc, msg = result
-                if msg:
-                    changes.append(msg)
+            # Each rule returns (modified_doc, log_message)
+            doc, msg = rule(doc)
+            if msg:
+                changes.append(msg)
         
         return doc, changes
 
@@ -56,6 +57,7 @@ class ShieldEngine:
         Policy: Every namespaced resource must have an explicit namespace.
         """
         kind = doc.get("kind", "")
+        # Resources that should NOT have a namespace (Cluster-scoped)
         cluster_scoped = [
             "Namespace", "Node", "ClusterRole", "ClusterRoleBinding", 
             "StorageClass", "PersistentVolume", "CustomResourceDefinition"
@@ -78,7 +80,7 @@ class ShieldEngine:
 
     def _rule_inject_resource_limits(self, doc: Any) -> Tuple[Any, str]:
         """
-        Policy: Workloads must have CPU/Memory limits.
+        Policy: Workloads must have CPU/Memory limits to prevent noisy neighbors.
         Refined to preserve CommentedMap structure during injection.
         """
         workload_kinds = ["Deployment", "StatefulSet", "Job", "DaemonSet", "ReplicaSet"]
@@ -88,7 +90,7 @@ class ShieldEngine:
 
         modified = False
         try:
-            # Traverse to the container level
+            # Traverse the K8s Spec tree safely to the container level
             spec = doc.get("spec", {}).get("template", {}).get("spec", {})
             containers = spec.get("containers", [])
             
@@ -109,6 +111,7 @@ class ShieldEngine:
                     modified = True
                     
         except (KeyError, AttributeError):
+            # If the structure is too mangled, the Core Engine will catch it; Shield stays silent
             pass
 
         if modified:

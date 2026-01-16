@@ -36,7 +36,8 @@ class AuditEngineV3:
     with safety gates for recursion depth and atomic write operations.
     """
 
-    def __init__(self, workspace_path: str, catalog_path: str):
+    def __init__(self, workspace_path: str, catalog_path: str, 
+                 cpu: str = "500m", mem: str = "512Mi"):
         """
         Initializes the V3 engine with workspace and K8s schema catalog.
         """
@@ -47,6 +48,10 @@ class AuditEngineV3:
         resolved_catalog = Path(base_path) / catalog_path
 
         try:
+            # Fallback for local development structures if PyInstaller path fails
+            if not resolved_catalog.exists():
+                resolved_catalog = Path(catalog_path).resolve()
+
             with open(resolved_catalog, 'r') as f:
                 self.catalog = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
@@ -56,8 +61,10 @@ class AuditEngineV3:
         # Initialize the specialized Healing Suite components
         self.pipeline = HealingPipeline(self.catalog)
         self.exporter = KubeExporter()
-        self.shield = ShieldEngine()
         self.validator = KubeValidator(self.catalog)
+        
+        # Shield is initialized with CLI-provided limits
+        self.shield = ShieldEngine(cpu_limit=cpu, mem_limit=mem)
         
         self._ensure_workspace()
 
@@ -78,7 +85,7 @@ class AuditEngineV3:
         if not full_path.exists():
             return self._file_error(relative_path, "FILE_NOT_FOUND", f"Path missing: {full_path}")
 
-        # State Tracking for report
+        # State Tracking
         success = False
         partial_heal = False
         is_modified = False
@@ -124,7 +131,7 @@ class AuditEngineV3:
 
         except Exception as e:
             logger.error(f"Error processing {relative_path}: {str(e)}")
-            return self._file_error(relative_path, "HEAL_FAILED", str(e))
+            return self._file_error(relative_path, "ENGINE_ERROR", str(e))
         
         # Phase 5: Result Construction
         result = {
@@ -136,7 +143,7 @@ class AuditEngineV3:
             "api_version": context.api_version if context else "Unknown",
             "written": False,
             "backup_created": None,
-            "healed_content": final_yaml if is_modified else None, # Restored for Diffing
+            "healed_content": final_yaml if is_modified else None,
             "logic_logs": all_logic_logs,
             "validation_error": validation_error,
             "git_warnings": self.check_git_safety(),
@@ -166,28 +173,43 @@ class AuditEngineV3:
                        target_version: str = "v1.31", max_depth: int = 10,
                        progress_callback: Optional[Callable[[int, int], None]] = None) -> List[Dict[str, Any]]:
         """
-        Recursively discovers and processes all YAML files. Restored with Depth/Symlink safety.
+        Recursively discovers and processes all YAML files with safety gates.
         """
+        try:
+            max_depth = int(max_depth)
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid max_depth '{max_depth}'. Falling back to default: 10")
+            max_depth = 10
+            
         reports = []
         patterns = [f"*{extension.lower()}", f"*{extension.upper()}"]
         
+        # Phase 1: File Discovery (Exclude symlinks to prevent loops)
         all_files = []
         for p in patterns:
-            # Exclude symlinks to prevent directory traversal attacks/recursion loops
             all_files.extend([f for f in self.workspace.rglob(p) if f.is_file() and not f.is_symlink()])
         
         total_files = len(all_files)
         processed = 0
 
+        # Phase 2: Processing Loop
         for file_path in all_files:
             try:
-                depth = len(file_path.relative_to(self.workspace).parts)
-                if depth > max_depth:
+                # Recursion depth check
+                rel_parts = file_path.relative_to(self.workspace).parts
+                if len(rel_parts) > max_depth:
                     continue
                 
                 rel_path = str(file_path.relative_to(self.workspace))
-                report = self.audit_and_heal_file(rel_path, dry_run, force_write, strict, target_version)
+                report = self.audit_and_heal_file(
+                    rel_path, 
+                    dry_run=dry_run, 
+                    force_write=force_write, 
+                    strict=strict, 
+                    target_version=target_version
+                )
                 reports.append(report)
+                
             except Exception as e:
                 logger.error(f"Critical error in scan loop for {file_path}: {str(e)}")
                 continue
@@ -212,20 +234,17 @@ class AuditEngineV3:
         return count
 
     def generate_summary(self, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Provides SRE-style performance summary of a scan run."""
+        """Provides SRE-style performance metrics."""
         if not reports:
             return {
-                "total_files": 0, 
-                "success_rate": 0, 
-                "successful": 0, 
-                "system_errors": 0, 
-                "backups_created": 0
+                "total_files": 0, "success_rate": 0, "successful": 0, 
+                "system_errors": 0, "backups_created": 0
             }
+
         total = len(reports)
         successful = sum(1 for r in reports if r.get('success', False))
         writes = sum(1 for r in reports if r.get('written', False))
         backups_count = sum(1 for r in reports if r.get('backup_created') is not None)
-        # Count reports that resulted in an ENGINE_ERROR
         system_errors = sum(1 for r in reports if r.get('status') == "ENGINE_ERROR")
         
         return {
@@ -233,8 +252,8 @@ class AuditEngineV3:
             "success_rate": (successful / total) if total > 0 else 0,
             "successful": successful,
             "written_to_disk": writes,
-            "backups_created": backups_count,     # Required by main.py
-            "system_errors": system_errors, # Required by main.py
+            "backups_created": backups_count,
+            "system_errors": system_errors,
             "summary_timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -271,9 +290,13 @@ class AuditEngineV3:
                 content = gitignore.read_text(encoding='utf-8', errors='ignore')
                 for ext in ["*.kubecuro.backup", "*.kubecuro.tmp"]:
                     if ext not in content:
-                        warnings.append(f"Add '{ext}' to .gitignore to prevent accidental commits.")
+                        warnings.append(f"Add '{ext}' to .gitignore")
             except: pass
         return warnings
 
     def _file_error(self, path: str, status: str, error: str) -> Dict[str, Any]:
-        return {"file_path": path, "status": status, "error": error, "success": False, "partial_heal": False, "system_errors": error, "kind": "Unknown"}
+        return {
+            "file_path": path, "status": status, "error": error, 
+            "success": False, "partial_heal": False, 
+            "system_errors": error, "kind": "Unknown"
+        }

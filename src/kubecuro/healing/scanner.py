@@ -33,6 +33,11 @@ class KubeScanner:
         Processes text into Shards using established regex patterns.
         Ensures alignment with the current models.py.
         """
+        # --- RESET GATE ---
+        # Ensures batch processing doesn't leak 'Kind' from previous files
+        self.found_kind = None
+        self.found_api = None
+        
         shards = []
         lines = raw_text.splitlines()
         

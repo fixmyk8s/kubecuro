@@ -1,20 +1,38 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Service
 metadata:
-  name: my-nginx
+name: my-app-service
+namespace: default
 spec:
-  selector:
-    matchLabels:
-      run: my-nginx
-  replicas: 2
-  template:
-    metadata:
-      labels:
-        run: my-nginx
-    spec:
-      containers:
-      - name: my-nginx
-        image: nginx
-        ports:
-        - containerPort: 80
+type: LoadBalancer
+
+selector:
+app: my-app
+# ❌ POTENTIAL ISSUE:
+# This selector may not match any Pods if the Deployment
+# uses additional labels (e.g., tier: backend).
+# Result: Service has no endpoints.
+
+ports:
+- name: http
+protocol: TCP
+
+
+  port: "80"
+  # ❌ BROKEN:
+  # port must be an integer, not a string.
+  # Kubernetes API expects a number.
+
+  targetPort: "8081"
+  # ❌ BROKEN:
+  # targetPort must be an integer (or a named port).
+  # Also likely incorrect: most apps listen on 8080, not 8081.
+  # Result: traffic will fail even if Service is created.
+
+  nodePort: 28000
+  # ❌ BROKEN:
+  # nodePort is NOT allowed when type is LoadBalancer.
+  # Even for NodePort services, valid range is 30000–32767.
+  # Result: kubectl apply will fail validation.
+
 

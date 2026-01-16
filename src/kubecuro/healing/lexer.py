@@ -23,6 +23,15 @@ class KubeLexer:
         self.in_block = False
         self.block_indent = 0
 
+    def _clean_artifacts(self, text: str) -> str:
+        """
+        Removes invisible UTF-8 BOM markers and standardized line endings.
+        """
+        # Remove Byte Order Mark if present
+        text = text.lstrip('\ufeff')
+        # Standardize CRLF to LF
+        return text.replace('\r\n', '\n')
+
     def _find_comment_split(self, text: str) -> int:
         """Protects quotes and # symbols inside values."""
         in_double_quote = in_single_quote = escaped = False
@@ -102,6 +111,7 @@ class KubeLexer:
         Decomposes raw YAML string into a List of Shard models.
         This is the primary interface for the HealingPipeline.
         """
+        clean_yaml = self._clean_artifacts(raw_yaml)
         self.in_block = False
         lines = raw_yaml.splitlines()
         shards = []
