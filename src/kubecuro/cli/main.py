@@ -30,10 +30,6 @@ from kubecuro.core.engine import AuditEngineV3
 # --- UI & GLOBAL CONFIGURATION ---
 console = Console()
 
-# Unicode constants for fixed-width alignment in help menus
-# En Quad (U+2000) provides a stable gap after emojis
-GAP = "\u2000" 
-
 rich_click.USE_RICH_MARKUP = True
 rich_click.STYLE_HELPTEXT = "italic dim"
 rich_click.MAX_WIDTH = 100 
@@ -44,13 +40,13 @@ def print_header():
     """
     Displays the application banner only on an empty CLI call.
     """
-    if len(sys.argv) == 1:
-        console.print("🚀 KubeCuro v1.0.0 starting...", style="bold yellow")
-        banner_content = (
-            "[bold cyan]Kubernetes Logic Diagnostics & YAML Auto-Healer[/bold cyan]\n"
-            "[italic white]Heal your K8s manifests with logic-aware diagnostics.[/italic white]"
-        )
-        console.print(Panel(banner_content, border_style="blue", expand=False))
+    console.print("")
+    console.print("🚀 KubeCuro v1.0.0 starting...", style="bold yellow")
+    banner_content = (
+        "[bold cyan]Kubernetes Logic Diagnostics & YAML Auto-Healer[/bold cyan]\n"
+        "[dim italic]Fix broken K8s manifests instantly[/dim italic]"
+    )
+    console.print(Panel(banner_content, border_style="blue", expand=False))
 
 def show_shield_logs(logs: List[str]):
     """
@@ -96,49 +92,89 @@ def show_side_by_side_diff(file_path: str, old_content: str, new_content: str):
     console.print("─" * console.width)
 
 # --- CLI DEFINITION ---
-
 @click.group(
     invoke_without_command=True,
     context_settings={"help_option_names": ["-h", "--help"]} 
 )
+@click.help_option("-h", "--help", help="Display help menu and available commands")
 @click.version_option(
     "1.0.0", "-v", "--version", 
     prog_name="kubecuro",        
-    message="🚀 KubeCuro v%(version)s"
-)
+    message="KubeCuro Version: v%(version)s",
+    help="Print version information"
+    )
+
+@click.option("--quiet", "-q", is_flag=True, help="Hide banner for scripts/automation")
 @click.pass_context
-def cli(ctx):
-    """KubeCuro: Heal your K8s manifests with logic-aware diagnostics."""
+def cli(ctx, quiet):
+    ctx.info_name = "kubecuro"
+    if not quiet and ctx.invoked_subcommand is None:
+        print_header()
+    
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
+        console.print("\n[bold cyan]COMMANDS:[/bold cyan]")  # Custom header
+        console.print("  scan    Audit manifests for issues")
+        console.print("  fix     Apply logical healing and fix manifest errors")
+        console.print("\n[bold cyan]GLOBAL OPTIONS:[/bold cyan]")
+        console.print("  -q, --quiet     Hide banner for scripts/automation")
+        console.print("  -v, --version   Print version information")
+        console.print("  -h, --help      Show this help")
+        console.print("\n[bold magenta]💡 TIP:[/bold magenta] Run [cyan]kubecuro scan/fix --help[/cyan] for options")
 
-@cli.command()
+@cli.command(help="Audit manifests for issues")
+@click.help_option("-h", "--help", help="Show detailed command help")
 @click.argument("path", type=click.Path(exists=True))
-@click.option("--diff", is_flag=True, help="Show suggested changes in preview.")
-@click.option("--max-depth", default=10, type=int, help="Max recursion depth.")
-@click.option("--ext", default=".yaml", help="File extension.")
-@click.option("--strict", is_flag=True, help="Fail on unknown fields.")
-def scan(path, diff, max_depth, ext, strict):
-    f"""\U0001f50d{GAP}Audit K8s manifests for errors without making changes."""
-    run_processing_loop(path, dry_run=True, diff=diff, max_depth=max_depth, ext=ext, strict=strict)
+@click.option("--output", "-o", type=click.Choice(['table', 'json']), default='table', 
+              help="Output format")
+@click.option("--diff", is_flag=True, help="Show before/after previews")
+@click.option("--strict", is_flag=True, help="Fail on unknown fields")
+@click.option("--max-depth", type=int, default=10, 
+              help="Max folder recursion depth (default: 10)")
+@click.option("--ext", default=".yaml,.yml", 
+              help="File extensions (default: .yaml,.yml)")
+def scan(path, diff, max_depth, ext, strict, output):
+    """Audit K8s manifests for errors without making changes
+    
+       Examples:
+       kubecuro scan .                    # Pretty table output
+       kubecuro scan . -o json            # JSON for automation  
+       kubecuro scan . --diff             # Show suggested fixes
+    
+    """
+    run_processing_loop(path, dry_run=True, diff=diff, max_depth=max_depth, ext=ext, strict=strict, output=output)
 
-@cli.command()
+@cli.command(help="Apply logical healing and fix manifest errors")
+@click.help_option("-h", "--help", help="Show detailed command help")
 @click.argument("path", type=click.Path(exists=True))
-@click.option("--dry-run", is_flag=True, help="Preview results without writing.")
-@click.option("--diff", is_flag=True, help="Display vertical split comparison.")
-@click.option("--yes", "-y", is_flag=True, help="Auto-confirm single file.")
-@click.option("--yes-all", is_flag=True, help="Auto-confirm batch operations.")
-@click.option("--force", is_flag=True, help="Force write even partial heals.")
-@click.option("--max-depth", default=10, type=int, help="Max recursion depth.")
-@click.option("--ext", default=".yaml", help="File extension.")
-@click.option("--strict", is_flag=True, help="Fail on unknown fields.")
-def fix(path, dry_run, diff, yes, yes_all, force, max_depth, ext, strict):
-    f"""\u2764\ufe0f{GAP}Auto-heal K8s manifests and fix logical errors."""
-    run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force, yes, yes_all)
+# Core Options (Top priority - most used)
+@click.option("--output", "-o", type=click.Choice(['table', 'json']), default='table', 
+              help="Output format (default: table)")
+@click.option("--dry-run", is_flag=True, help="Preview changes without writing")
+@click.option("--diff", is_flag=True, help="Show before/after side-by-side previews")
+# Safety Controls (User protection)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation for single file")
+@click.option("--yes-all", is_flag=True, help="Skip ALL safety checks - PRODUCTION RISK")
+@click.option("--force", is_flag=True, help="Write even partial/incomplete heals")
+# Scan Control (Advanced)
+@click.option("--max-depth", type=int, default=10, 
+              help="Max folder recursion depth (default: 10)")
+@click.option("--ext", default=".yaml,.yml", 
+              help="File extensions (default: .yaml,.yml)")
+@click.option("--strict", is_flag=True, help="Fail on unknown fields")
+def fix(path, dry_run, diff, yes, yes_all, force, max_depth, ext, strict, output):
+    """Auto-heal Kubernetes manifests with safety gates
+    
+    Examples:
+        kubecuro fix .                    # Interactive healing
+        kubecuro fix . --dry-run          # Safe preview
+        kubecuro fix deployment.yaml -y   # Single file, no prompt
+        kubecuro fix . -o json --yes-all  # Batch automation
+    """
+    run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force, yes, yes_all, output)
 
 # --- CORE LOGIC ORCHESTRATOR ---
 
-def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False, yes=False, yes_all=False):
+def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False, yes=False, yes_all=False, output='table'):
     """
     Core loop for manifest processing. Handles discovery and batch safety confirmations.
     """
@@ -146,11 +182,14 @@ def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False
     workspace = input_path if input_path.is_dir() else input_path.parent
     
     # Catalog Discovery Logic
-    base_path = Path(__file__).resolve().parent
+    if hasattr(sys, '_MEIPASS'):
+        base_path = Path(sys._MEIPASS)
+    else:
+        base_path = Path(__file__).resolve().parent
+
     search_locations = [
         base_path / "catalog" / "k8s_v1_distilled.json",
-        base_path.parent / "catalog" / "k8s_v1_distilled.json",
-        Path("catalog/k8s_v1_distilled.json")
+        Path("catalog/k8s_v1_distilled.json") # Local development fallback
     ]
     
     catalog = ""
@@ -169,7 +208,11 @@ def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False
     if input_path.is_file():
         target_files = [input_path]
     else:
-        target_files = sorted([f for f in input_path.rglob(f"*{ext}") if f.is_file() and not f.is_symlink()])
+        extensions = [e.lstrip('.') for e in ext.split(',')]
+        target_files = []
+        for e in extensions:
+            target_files.extend([f for f in input_path.rglob(f"*.{e}") if f.is_file() and not f.is_symlink()])
+        target_files = sorted(list(set(target_files)))
 
     if not target_files:
         console.print(f"\n[bold yellow]⚠️  No valid {ext} manifests found.[/bold yellow]")
@@ -179,16 +222,16 @@ def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False
     if not dry_run:
         if len(target_files) > 1 and not yes_all:
             console.print(Panel(
-                f"[bold red]⚠️  SAFETY GATE: BULK MANIFEST MODIFICATION[/bold red]\n\n"
-                f"Preparing to auto-heal [bold cyan]{len(target_files)}[/bold cyan] Kubernetes manifests.\n"
-                f"Target Path: [white]{path}[/white]\n",
+                f"[bold red]⚠️  SAFETY GATE: BULK FIX ({len(target_files)} manifests)[/bold red]\n\n"
+                f"[yellow]⚠️   Use `kubecuro fix . --dry-run --diff` FIRST to preview changes[/yellow]\n"
+                f"[white]Target: {path}[/white]\n\n"
+                f"[bold cyan]🚀 CONFIRM to auto-heal ALL manifests[/bold cyan]",
                 expand=False, border_style="red"
             ))
-            if click.prompt("[bold yellow]Type 'CONFIRM' to apply logical fixes[/bold yellow]", default="") != "CONFIRM":
-                console.print("[bold red]Action aborted by user. No files modified.[/bold red]")
-                return
-        elif len(target_files) == 1 and not (yes or yes_all):
-            if not click.confirm(f"[bold yellow]Apply healing to manifest: {target_files[0].name}?[/bold yellow]"):
+            
+            response = console.input("[bold yellow]Type 'CONFIRM' to proceed: [/bold yellow]").strip().upper()
+            if response != "CONFIRM":
+                console.print("[bold red]✓ Aborted safely[/bold red]")
                 return
 
     reports = []
@@ -201,9 +244,9 @@ def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False
         TaskProgressColumn(),
         TimeElapsedColumn(),
         console=console,
-        transient=False 
+        transient=True 
     ) as progress:
-        task = progress.add_task("Analyzing manifests...", total=len(target_files))
+        task = progress.add_task("[cyan]Analyzing manifests...", total=len(target_files))
         
         for file_path in target_files:
             try:
@@ -236,7 +279,12 @@ def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False
                 })
                 progress.advance(task)
 
-        progress.update(task, description="[bold green]All tasks completed![/bold green]")
+        progress.update(task, completed=len(target_files), description="[bold green]✓ Analysis complete[/bold green]")
+    
+    if output == 'json':
+        import json
+        console.print(json.dumps(reports, indent=2))
+        return  # Skip table output, exit early
 
     render_summary(reports, engine)
 
@@ -245,7 +293,7 @@ def render_summary(reports: List[Dict], engine: Any):
     Constructs final execution tables, git safety warnings, and summary panels.
     """
     table = Table(
-        title="\n[bold magenta]KubeCuro Scan Execution Report[/bold magenta]", 
+        title="\n[bold magenta]KubeCuro Execution Report[/bold magenta]", 
         show_lines=True, 
         header_style="bold",
         box=box.MINIMAL_HEAVY_HEAD,
@@ -293,10 +341,10 @@ def render_summary(reports: List[Dict], engine: Any):
         f"System Errors:   [red]{summary.get('system_errors', 0)}[/red]\n"
         f"Backups Created: {summary.get('backups_created', 0)}"
     )
-    console.print(Panel(summary_text, border_style="dim", expand=False))
+    console.print(Panel(summary_text, border_style="cyan", expand=False))
 
 if __name__ == "__main__":
-    print_header()
+    #print_header()
     try:
         cli()
     except KeyboardInterrupt:

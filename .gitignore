@@ -16,3 +16,4 @@ venv/
 dist/
 build/
 *.tmp
+*.spec
