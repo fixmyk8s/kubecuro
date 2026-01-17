@@ -12,6 +12,9 @@ Date: 2026-01-16
 import json
 from kubecuro.healing.pipeline import HealingPipeline
 from kubecuro.rules.shield import ShieldEngine
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 def run_stress_test():
     # 1. Mock Schema Catalog (Minimal for testing)

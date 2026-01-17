@@ -2,6 +2,9 @@ import pytest
 from pathlib import Path
 from kubecuro.healing.pipeline import HealingPipeline
 from ruamel.yaml import YAML
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 # Standardized K8s samples
 VALID_K8S_SAMPLES = [

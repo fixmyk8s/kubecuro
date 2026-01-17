@@ -25,7 +25,7 @@ from kubecuro.healing.exporter import KubeExporter
 from kubecuro.rules.shield import ShieldEngine
 from kubecuro.validator.validator import KubeValidator
 
-# Setup standardized logging
+# Setup standardized logging for engine diagnostics
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kubecuro.engine")
 
@@ -40,6 +40,7 @@ class AuditEngineV3:
                  cpu: str = "500m", mem: str = "512Mi"):
         """
         Initializes the V3 engine with workspace and K8s schema catalog.
+        Supports both local dev and PyInstaller environments.
         """
         self.workspace = Path(workspace_path).resolve()
         
@@ -63,7 +64,7 @@ class AuditEngineV3:
         self.exporter = KubeExporter()
         self.validator = KubeValidator(self.catalog)
         
-        # Shield is initialized with CLI-provided limits
+        # Shield is initialized with CLI-provided resource limits
         self.shield = ShieldEngine(cpu_limit=cpu, mem_limit=mem)
         
         self._ensure_workspace()
@@ -79,6 +80,7 @@ class AuditEngineV3:
                             target_version: str = "v1.31") -> Dict[str, Any]:
         """
         Performs a full audit and healing cycle on a single manifest.
+        Handles reading, healing, shielding, and atomic writing.
         """
         full_path = (self.workspace / relative_path).resolve()
         
@@ -94,7 +96,7 @@ class AuditEngineV3:
         validation_error = ""
 
         try:
-            # Phase 1: Read (BOM-aware)
+            # Phase 1: Read (UTF-8 BOM-aware)
             raw_text = full_path.read_text(encoding='utf-8-sig')
 
             # Phase 2: Healing Pipeline (Surgery)
@@ -150,7 +152,7 @@ class AuditEngineV3:
             "timestamp": time.time()
         }
 
-        # Execution (Disk I/O)
+        # Execution (Disk I/O) with Backup Protection
         if not dry_run and is_modified and (success or (partial_heal and force_write)):
             backup_path = self._create_unique_backup(full_path)
             try:
@@ -173,7 +175,8 @@ class AuditEngineV3:
                        target_version: str = "v1.31", max_depth: int = 10,
                        progress_callback: Optional[Callable[[int, int], None]] = None) -> List[Dict[str, Any]]:
         """
-        Recursively discovers and processes all YAML files with safety gates.
+        Recursively discovers and processes all YAML manifests with safety gates.
+        Preserves original multi-pattern discovery and symlink protection.
         """
         try:
             max_depth = int(max_depth)
@@ -221,7 +224,7 @@ class AuditEngineV3:
         return reports
 
     def cleanup_backups(self, max_age_hours: int = 168) -> int:
-        """Removes old backup files (default 7 days)."""
+        """Removes old .kubecuro.backup files (default 7 days)."""
         count = 0
         cutoff = time.time() - (max_age_hours * 3600)
         for backup in self.workspace.rglob("*.kubecuro.backup"):
@@ -234,7 +237,10 @@ class AuditEngineV3:
         return count
 
     def generate_summary(self, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Provides SRE-style performance metrics."""
+        """
+        Provides SRE-style performance metrics.
+        Synchronized with main.py wordings: 'Total Manifests', 'Healed/Valid'.
+        """
         if not reports:
             return {
                 "total_files": 0, "success_rate": 0, "successful": 0, 
@@ -242,6 +248,7 @@ class AuditEngineV3:
             }
 
         total = len(reports)
+        # Successful includes files that were healed OR already valid
         successful = sum(1 for r in reports if r.get('success', False))
         writes = sum(1 for r in reports if r.get('written', False))
         backups_count = sum(1 for r in reports if r.get('backup_created') is not None)
@@ -250,20 +257,22 @@ class AuditEngineV3:
         return {
             "total_files": total,
             "success_rate": (successful / total) if total > 0 else 0,
-            "successful": successful,
+            "successful": successful, # Maps to 'Healed/Valid' in CLI
             "written_to_disk": writes,
             "backups_created": backups_count,
             "system_errors": system_errors,
             "summary_timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
-    def _derive_status(self, modified, dry, success, partial) -> str:
+    def _derive_status(self, modified: bool, dry: bool, success: bool, partial: bool) -> str:
+        """Maps Boolean flags to semantic status strings for the CLI table."""
         if not modified: return "UNCHANGED"
         if dry: return "PREVIEW"
         if success: return "HEALED"
         return "PARTIAL" if partial else "FAILED"
 
     def _atomic_write(self, target_path: Path, content: str):
+        """Ensures data integrity by writing to a temporary file before renaming."""
         if not os.access(target_path.parent, os.W_OK):
             raise PermissionError(f"No write access to {target_path.parent}")
         temp_file = target_path.with_suffix('.kubecuro.tmp')
@@ -275,6 +284,7 @@ class AuditEngineV3:
             raise IOError(f"Atomic write failed: {str(e)}")
 
     def _create_unique_backup(self, target_path: Path) -> Path:
+        """Creates unique backup names to avoid overwriting previous snapshots."""
         backup_path = target_path.with_suffix('.kubecuro.backup')
         counter = 1
         while backup_path.exists():
@@ -283,6 +293,7 @@ class AuditEngineV3:
         return backup_path
 
     def check_git_safety(self) -> List[str]:
+        """Detects if KubeCuro temporary files are properly ignored in Git."""
         warnings = []
         gitignore = self.workspace / ".gitignore"
         if (self.workspace / ".git").exists() and gitignore.exists():
@@ -295,6 +306,7 @@ class AuditEngineV3:
         return warnings
 
     def _file_error(self, path: str, status: str, error: str) -> Dict[str, Any]:
+        """Generates a failure report entry for files that couldn't be processed."""
         return {
             "file_path": path, "status": status, "error": error, 
             "success": False, "partial_heal": False, 
