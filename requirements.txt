@@ -1,0 +1,12 @@
+# Core CLI & UI
+rich>=13.0.0
+rich-click>=1.7.0
+click>=8.1.0
+
+# YAML & Data Parsing
+ruamel.yaml>=0.17.0
+argcomplete>=3.0.0
+
+# Build Infrastructure
+pyinstaller>=6.3.0
+staticx>=0.14.1; sys_platform == 'linux'

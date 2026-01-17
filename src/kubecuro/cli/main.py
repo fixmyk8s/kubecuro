@@ -236,7 +236,7 @@ def run_processing_loop(path, dry_run, diff, max_depth, ext, strict, force=False
                 })
                 progress.advance(task)
 
-        progress.update(task, description="[bold green]Manifest logical integrity restored successfully[/bold green]")
+        progress.update(task, description="[bold green]All tasks completed![/bold green]")
 
     render_summary(reports, engine)
 
@@ -248,8 +248,8 @@ def render_summary(reports: List[Dict], engine: Any):
         title="\n[bold magenta]KubeCuro Scan Execution Report[/bold magenta]", 
         show_lines=True, 
         header_style="bold",
-        box=box.MINIMAL_HEAVY,
-        expand=True
+        box=box.MINIMAL_HEAVY_HEAD,
+        expand=False
     )
     table.add_column("Manifest Path", style="cyan", no_wrap=False)
     table.add_column("Kind", style="white")
